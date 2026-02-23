@@ -1,0 +1,7 @@
+name: CI Placeholder
+on: { workflow_dispatch: {} }
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CI to be enabled with implementation"

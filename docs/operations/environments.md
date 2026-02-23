@@ -1,0 +1,5 @@
+# Environments
+
+- local
+- staging
+- production
