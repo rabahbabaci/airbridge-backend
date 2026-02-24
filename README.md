@@ -2,6 +2,8 @@
 
 Production backend for **AirBridge** — the door-to-gate departure decision engine.
 
+**Current phase:** Feedback Beta (Week 1 complete)
+
 ---
 
 ## Purpose
@@ -101,8 +103,22 @@ PYTHONPATH=src pytest tests/ -v
 | `GET` | `/health` | Liveness check |
 | `GET` | `/version` | App name, version, and environment |
 | `POST` | `/v1/trips` | Intake and validate a trip context (dual mode) |
-| `POST` | `/v1/recommendations` | Compute leave-home recommendation |
-| `POST` | `/v1/recommendations/recompute` | Recompute recommendation for existing trip |
+| `POST` | `/v1/recommendations` | Placeholder v0 leave-home recommendation (live-data integrations pending) |
+| `POST` | `/v1/recommendations/recompute` | Placeholder v0 recompute for existing trip |
+
+---
+
+
+## Current Beta Scope
+
+- Airports in scope: **SFO, OAK, SJC**
+- Trip intake modes:
+  - `flight_number`
+  - `route_search`
+
+### `departure_time_window` allowed values
+
+`morning | midday | afternoon | evening | late_night | not_sure`
 
 ---
 
