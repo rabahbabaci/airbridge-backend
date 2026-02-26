@@ -11,6 +11,19 @@ app = FastAPI(
     version=settings.app_version,
 )
 
+
+@app.get("/")
+def root():
+    return {
+        "name": "AirBridge API",
+        "docs": "/docs",
+        "health": "/health",
+        "version": "/version",
+        "trips": "/v1/trips",
+        "recommendations": "/v1/recommendations",
+    }
+
+
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 
