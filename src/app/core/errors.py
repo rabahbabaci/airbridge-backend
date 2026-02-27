@@ -2,13 +2,14 @@ from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 
 
 class AppError(Exception):
     """Base application error with a structured JSON body."""
 
-    def __init__(self, code: str, message: str, details: Any = None, status_code: int = 400) -> None:
+    def __init__(
+        self, code: str, message: str, details: Any = None, status_code: int = 400
+    ) -> None:
         self.code = code
         self.message = message
         self.details = details
@@ -18,7 +19,9 @@ class AppError(Exception):
 
 class InvalidInputError(AppError):
     def __init__(self, message: str, details: Any = None) -> None:
-        super().__init__(code="INVALID_INPUT", message=message, details=details, status_code=422)
+        super().__init__(
+            code="INVALID_INPUT", message=message, details=details, status_code=422
+        )
 
 
 class UnsupportedModeError(AppError):
