@@ -3,7 +3,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from app.schemas.trips import TripPreferences
+from app.schemas.trips import TripPreferenceOverrides
 
 
 class ConfidenceLevel(str, Enum):
@@ -30,7 +30,7 @@ class RecommendationRecomputeRequest(BaseModel):
     reason: str | None = Field(
         None, description="Optional reason for recompute, e.g. 'traffic_update'"
     )
-    preference_overrides: TripPreferences | None = Field(
+    preference_overrides: TripPreferenceOverrides | None = Field(
         None,
         description="Optional overrides for transport_mode, confidence_profile, bag_count, etc.",
     )

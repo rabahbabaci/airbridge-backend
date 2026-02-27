@@ -1,4 +1,4 @@
-"""Schemas for flight snapshot (scheduled times, terminal, base airport timings)."""
+"""Schemas for flight snapshot (scheduled times, terminal, airport timing profile)."""
 
 from datetime import datetime
 
@@ -6,13 +6,31 @@ from pydantic import BaseModel, Field
 
 
 class AirportTimings(BaseModel):
-    """Baseline times at the airport (e.g. TSA, check-in)."""
+    """Per-airport timing profile for journey segments."""
 
-    base_tsa_minutes: int = Field(
-        ..., description="Baseline TSA/security time in minutes"
+    curb_to_checkin_minutes: int = Field(
+        5,
+        description="Walk from terminal curb to check-in/kiosk area",
     )
-    check_in_buffer_minutes: int = Field(
-        ..., description="Recommended check-in buffer in minutes"
+    parking_to_terminal_minutes: int = Field(
+        10,
+        description="Walk/shuttle from parking to terminal entrance",
+    )
+    transit_station_to_terminal_minutes: int = Field(
+        12,
+        description="Walk from train/bus station to terminal (e.g. BART to SFO)",
+    )
+    checkin_to_security_minutes: int = Field(
+        5,
+        description="Walk from check-in area to security entrance",
+    )
+    security_minutes: int = Field(
+        25,
+        description="Time through TSA/security screening",
+    )
+    security_to_gate_minutes: int = Field(
+        10,
+        description="Walk from security exit to departure gate",
     )
 
 
@@ -31,5 +49,5 @@ class FlightSnapshot(BaseModel):
         None, description="Destination IATA code"
     )
     airport_timings: AirportTimings = Field(
-        ..., description="Base airport timings (TSA, check-in)"
+        ..., description="Per-airport timing profile for journey segments"
     )
