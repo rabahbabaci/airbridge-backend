@@ -35,11 +35,7 @@ def process_trip_intake(
             flight_number=payload.flight_number,
             departure_date=payload.departure_date,
             home_address=payload.home_address,
-            transport_mode=payload.transport_mode,
-            confidence_profile=payload.confidence_profile,
-            bag_count=payload.bag_count,
-            traveling_with_children=payload.traveling_with_children,
-            extra_time_minutes=payload.extra_time_minutes,
+            preferences=payload.preferences,
             created_at=now,
         )
     else:
@@ -52,11 +48,7 @@ def process_trip_intake(
             departure_date=payload.departure_date,
             departure_time_window=payload.departure_time_window,
             home_address=payload.home_address,
-            transport_mode=payload.transport_mode,
-            confidence_profile=payload.confidence_profile,
-            bag_count=payload.bag_count,
-            traveling_with_children=payload.traveling_with_children,
-            extra_time_minutes=payload.extra_time_minutes,
+            preferences=payload.preferences,
             created_at=now,
         )
 
