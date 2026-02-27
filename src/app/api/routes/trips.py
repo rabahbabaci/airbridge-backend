@@ -1,7 +1,6 @@
 from fastapi import APIRouter
-from pydantic import ValidationError
 
-from app.core.errors import InvalidInputError, UnsupportedModeError
+from app.core.errors import UnsupportedModeError
 from app.schemas.trips import (
     FlightNumberTripRequest,
     RouteSearchTripRequest,
