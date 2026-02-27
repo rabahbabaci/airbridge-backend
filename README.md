@@ -20,6 +20,8 @@ This repository contains the production API backend for AirBridge. It handles:
 - **Live recompute** — Recalculates recommendations when conditions change (traffic, flight delays, TSA surges) *(Week 2)*
 - **Airport profiles** — Per-airport timing data for SFO, OAK, and SJC with extensible architecture for nationwide expansion
 
+> **Schema contract:** Any change to `src/app/schemas/*.py` must be mirrored in `airbridge-frontend/src/api/airbridge.contracts.ts` to keep the frontend types in sync.
+
 ---
 
 ## Architecture
@@ -114,7 +116,7 @@ cp .env.example .env
 PYTHONPATH=src uvicorn app.main:app --reload --port 8000
 ```
 
-The API will be available at:
+API surfaces:
 
 - **API root:** <http://localhost:8000>
 - **Interactive docs:** <http://localhost:8000/docs>
