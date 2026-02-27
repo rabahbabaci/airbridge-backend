@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
 from app.api.routes import health, recommendations, trips, version
@@ -9,6 +10,14 @@ app = FastAPI(
     title="AirBridge API",
     description="Door-to-gate departure decision engine",
     version=settings.app_version,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # TODO: tighten for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
