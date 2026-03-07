@@ -1,9 +1,11 @@
-"""Build flight snapshot from trip context. Placeholder data for now; real integrations plug in later."""
+"""Build flight snapshot from trip context. Uses AeroDataBox for live flight data."""
 
 from datetime import datetime, timezone, timedelta
 
 from app.schemas.flight_snapshot import AirportTimings, FlightSnapshot
 from app.schemas.trips import TripContext, DepartureTimeWindow
+from app.services.integrations.aerodatabox import lookup_flights
+from app.services.integrations.airport_defaults import get_airport_timings
 
 TIME_WINDOW_MINUTES: dict[DepartureTimeWindow, tuple[int, int] | None] = {
     DepartureTimeWindow.morning: (6 * 60, 11 * 60 + 59),
@@ -15,24 +17,6 @@ TIME_WINDOW_MINUTES: dict[DepartureTimeWindow, tuple[int, int] | None] = {
     DepartureTimeWindow.not_sure: None,
 }
 
-_AIRPORT_TIMINGS_OVERRIDES: dict[str, dict[str, int]] = {
-    "SFO": {
-        "security_minutes": 30,
-        "parking_to_terminal_minutes": 12,
-        "transit_station_to_terminal_minutes": 15,  # BART + AirTrain
-    },
-    "OAK": {
-        "security_minutes": 20,
-        "parking_to_terminal_minutes": 8,
-        "transit_station_to_terminal_minutes": 10,  # BART + walk
-    },
-    "SJC": {
-        "security_minutes": 20,
-        "parking_to_terminal_minutes": 8,
-        "transit_station_to_terminal_minutes": 12,
-    },
-}
-
 
 def get_time_window_minutes(
     window: DepartureTimeWindow | None,
@@ -42,10 +26,33 @@ def get_time_window_minutes(
     return TIME_WINDOW_MINUTES.get(window)
 
 
+def get_available_flights(flight_number: str, date_str: str) -> list[dict]:
+    """Return list of flight options from AeroDataBox for the given flight number and date."""
+    return lookup_flights(flight_number, date_str)
+
+
 def _airport_timings_for(airport_code: str | None) -> AirportTimings:
     code = (airport_code or "").strip().upper()
-    overrides = _AIRPORT_TIMINGS_OVERRIDES.get(code, {})
-    return AirportTimings(**overrides)
+    defaults = get_airport_timings(code)
+    return AirportTimings(
+        curb_to_checkin_minutes=defaults["curb_to_checkin"],
+        parking_to_terminal_minutes=defaults["parking_to_terminal"],
+        transit_station_to_terminal_minutes=defaults["transit_to_terminal"],
+        checkin_to_security_minutes=defaults["checkin_to_security"],
+        security_minutes=25,  # placeholder — TSA estimate injected in recommendation service
+        security_to_gate_minutes=defaults["security_to_gate"],
+    )
+
+
+def _parse_utc_datetime(s: str | None) -> datetime | None:
+    """Parse AeroDataBox UTC string (e.g. '2026-03-07 18:09Z') to timezone-aware datetime."""
+    if not s:
+        return None
+    try:
+        normalized = (s or "").strip().replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except (ValueError, TypeError):
+        return None
 
 
 def _build_fallback_snapshot(
@@ -89,9 +96,24 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
         trip_context.origin_airport if trip_context.input_mode == "route_search" else None
     )
     try:
-        # TODO Week 2: call live flight provider here
-        # snapshot = flight_provider.get_snapshot(trip_context)
-        # return snapshot
-        raise NotImplementedError("Live provider not yet connected")
+        if trip_context.flight_number and trip_context.departure_date:
+            flights = lookup_flights(
+                trip_context.flight_number, str(trip_context.departure_date)
+            )
+            if flights:
+                flight = flights[0]
+                origin_iata = flight.get("origin_iata")
+                scheduled_departure = _parse_utc_datetime(flight.get("departure_time_utc"))
+                scheduled_arrival = _parse_utc_datetime(flight.get("arrival_time_utc"))
+                if scheduled_departure is not None:
+                    return FlightSnapshot(
+                        scheduled_departure=scheduled_departure,
+                        scheduled_arrival=scheduled_arrival,
+                        departure_terminal=flight.get("departure_terminal"),
+                        origin_airport_code=origin_iata,
+                        destination_airport_code=flight.get("destination_iata"),
+                        airport_timings=_airport_timings_for(origin_iata),
+                    )
+        return _build_fallback_snapshot(trip_context, airport_code)
     except Exception:
         return _build_fallback_snapshot(trip_context, airport_code)
