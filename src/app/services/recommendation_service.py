@@ -1,4 +1,4 @@
-"""Recommendation engine v0.5: deterministic lead time from preferences and flight snapshot."""
+"""Recommendation engine: lead time from preferences, flight snapshot, and integrations."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -17,25 +17,26 @@ from app.schemas.trips import (
     TripPreferences,
 )
 from app.services.flight_snapshot_service import build_flight_snapshot
+from app.services.integrations.airport_defaults import get_airport_timings
+from app.services.integrations.google_maps import get_airport_destination, get_drive_time
+from app.services.integrations.tsa_estimator import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
 
-# Lead time and modifiers (tunable constants)
-BASE_LEAD_TIME_MINUTES = 90
-GATE_BUFFER_MINUTES = 15
-TRANSPORT_OFFSET_MINUTES: dict[TransportMode, int] = {
-    TransportMode.rideshare: 20,
-    TransportMode.driving: 10,
-    TransportMode.train: 25,
-    TransportMode.bus: 25,
-    TransportMode.other: 15,
-}
-MINUTES_PER_BAG = 7
-MINUTES_WITH_CHILDREN = 10
 CONFIDENCE_MULTIPLIERS: dict[ConfidenceProfile, float] = {
     ConfidenceProfile.safety: 1.25,
     ConfidenceProfile.sweet: 1.0,
     ConfidenceProfile.risk: 0.85,
 }
+
+CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
+    ConfidenceProfile.safety: 0.92,
+    ConfidenceProfile.sweet: 0.85,
+    ConfidenceProfile.risk: 0.70,
+}
+
+BOARDING_BUFFER_MINUTES = 15
+RIDESHARE_PICKUP_WAIT_MINUTES = 5
+LEAVE_OFFSET_MINUTES = 30  # boarding starts before departure
 
 
 def _effective_context(
@@ -44,99 +45,116 @@ def _effective_context(
     """Apply preference_overrides onto a copy of context (only non-None overrides)."""
     if not overrides:
         return context
-    updates: dict[str, object] = {}
+    prefs_updates: dict[str, object] = {}
     if overrides.transport_mode is not None:
-        updates["transport_mode"] = overrides.transport_mode
+        prefs_updates["transport_mode"] = overrides.transport_mode
     if overrides.confidence_profile is not None:
-        updates["confidence_profile"] = overrides.confidence_profile
+        prefs_updates["confidence_profile"] = overrides.confidence_profile
     if overrides.bag_count is not None:
-        updates["bag_count"] = overrides.bag_count
+        prefs_updates["bag_count"] = overrides.bag_count
     if overrides.traveling_with_children is not None:
-        updates["traveling_with_children"] = overrides.traveling_with_children
+        prefs_updates["traveling_with_children"] = overrides.traveling_with_children
     if overrides.extra_time_minutes is not None:
-        updates["extra_time_minutes"] = overrides.extra_time_minutes
-    return context.model_copy(update=updates)
+        prefs_updates["extra_time_minutes"] = overrides.extra_time_minutes
+    new_prefs = context.preferences.model_copy(update=prefs_updates)
+    return context.model_copy(update={"preferences": new_prefs})
 
 
-def _compute_lead_minutes(
-    context: TripContext, snapshot: FlightSnapshot
-) -> tuple[int, list[SegmentDetail], list[str]]:
-    """
-    Compute total lead time in minutes and segment breakdown.
-    Returns (total_minutes, segments, explanation_parts for modifiers).
-    """
-    transport_offset = TRANSPORT_OFFSET_MINUTES.get(context.transport_mode, 15)
-    airport_baseline = (
-        snapshot.airport_timings.base_tsa_minutes
-        + snapshot.airport_timings.check_in_buffer_minutes
+def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[SegmentDetail]:
+    """Build ordered journey segments from context and snapshot using real integrations."""
+    origin_iata = snapshot.origin_airport_code or ""
+    timings = get_airport_timings(origin_iata)
+    prefs = context.preferences
+    segments: list[SegmentDetail] = []
+
+    # 1. Drive to airport
+    drive = get_drive_time(context.home_address, origin_iata)
+    drive_minutes = drive["duration_minutes"]
+    if prefs.transport_mode == TransportMode.rideshare:
+        drive_minutes += RIDESHARE_PICKUP_WAIT_MINUTES
+    segments.append(
+        SegmentDetail(
+            id="drive",
+            label=f"Drive to {origin_iata or 'airport'}",
+            duration_minutes=drive_minutes,
+            advice=f"{drive.get('duration_text', '')} — {drive.get('distance_text', '')}".strip(" — "),
+        )
     )
-    mult = CONFIDENCE_MULTIPLIERS.get(context.confidence_profile, 1.0)
 
-    # Core time (before multiplier): base lead + transport + airport + gate
-    core_minutes = (
-        BASE_LEAD_TIME_MINUTES
-        + transport_offset
-        + airport_baseline
-        + GATE_BUFFER_MINUTES
-    )
-    # Modifiers added directly (then we add extra_time at end)
-    bag_minutes = context.bag_count * MINUTES_PER_BAG
-    children_minutes = MINUTES_WITH_CHILDREN if context.traveling_with_children else 0
-    modifier_minutes = bag_minutes + children_minutes + context.extra_time_minutes
-
-    total_minutes = int(round(core_minutes * mult)) + modifier_minutes
-
-    # Segment durations (proportional to core components, scaled by mult), then add modifier as "extra buffer"
-    home_buffer = int(round(BASE_LEAD_TIME_MINUTES * mult))
-    transport_dur = int(round(transport_offset * mult))
-    security_dur = int(round(airport_baseline * mult))
-    gate_dur = int(round(GATE_BUFFER_MINUTES * mult))
-    # If modifier_minutes > 0, add as final segment
-    segments = [
-        SegmentDetail(
-            id="home_buffer",
-            label="Home buffer",
-            duration_minutes=home_buffer,
-            advice="Leave home in time for transport.",
-        ),
-        SegmentDetail(
-            id="transport",
-            label="Transport to airport",
-            duration_minutes=transport_dur,
-            advice=f"Allow time for {context.transport_mode.value}.",
-        ),
-        SegmentDetail(
-            id="check_in_security",
-            label="Check-in & security",
-            duration_minutes=security_dur,
-            advice="TSA and check-in buffer.",
-        ),
-        SegmentDetail(
-            id="gate_buffer",
-            label="Gate buffer",
-            duration_minutes=gate_dur,
-            advice="Reach gate before boarding.",
-        ),
-    ]
-    if modifier_minutes > 0:
+    # 2. Curb to check-in
+    curb_min = timings["curb_to_checkin"]
+    if curb_min > 0:
         segments.append(
             SegmentDetail(
-                id="extra_buffer",
-                label="Extra buffer",
-                duration_minutes=modifier_minutes,
-                advice="Bags, children, and extra time.",
+                id="curb_to_checkin",
+                label="Curb to check-in",
+                duration_minutes=curb_min,
+                advice="",
             )
         )
 
-    explanation_parts: list[str] = []
-    if context.bag_count > 0:
-        explanation_parts.append(f"+{bag_minutes} min for {context.bag_count} bag(s)")
-    if context.traveling_with_children:
-        explanation_parts.append(f"+{MINUTES_WITH_CHILDREN} min for kids")
-    if context.extra_time_minutes > 0:
-        explanation_parts.append(f"+{context.extra_time_minutes} min extra buffer")
+    # 3. Bag drop
+    bag_count = prefs.bag_count or 0
+    if bag_count > 0:
+        bag_minutes = 5 + (bag_count - 1) * 3
+        segments.append(
+            SegmentDetail(
+                id="bag_drop",
+                label="Bag drop",
+                duration_minutes=bag_minutes,
+                advice=f"{bag_count} bag(s)",
+            )
+        )
 
-    return total_minutes, segments, explanation_parts
+    # 4. Check-in to security
+    checkin_to_sec = timings["checkin_to_security"]
+    segments.append(
+        SegmentDetail(
+            id="walk_to_security",
+            label="Walk to security",
+            duration_minutes=checkin_to_sec,
+            advice="",
+        )
+    )
+
+    # 5. TSA Security
+    departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
+    tsa = estimate_tsa_wait(origin_iata, departure_hour)
+    segments.append(
+        SegmentDetail(
+            id="tsa",
+            label=f"TSA Security ({origin_iata})",
+            duration_minutes=tsa["estimated_minutes"],
+            advice=tsa.get("period", ""),
+        )
+    )
+
+    # 6. Walk to gate
+    gate_walk = timings["security_to_gate"]
+    gate_advice_parts = []
+    if snapshot.departure_terminal:
+        gate_advice_parts.append(f"Terminal {snapshot.departure_terminal}")
+    # Gate number isn't on FlightSnapshot; we only have departure_terminal
+    segments.append(
+        SegmentDetail(
+            id="walk_to_gate",
+            label="Walk to gate",
+            duration_minutes=gate_walk,
+            advice=", ".join(gate_advice_parts) if gate_advice_parts else "",
+        )
+    )
+
+    # 7. Boarding buffer
+    segments.append(
+        SegmentDetail(
+            id="boarding_buffer",
+            label="Boarding buffer",
+            duration_minutes=BOARDING_BUFFER_MINUTES,
+            advice="Be at gate before boarding begins",
+        )
+    )
+
+    return segments
 
 
 def _confidence_from_profile(profile: ConfidenceProfile) -> ConfidenceLevel:
@@ -153,26 +171,32 @@ def _build_response(
     snapshot: FlightSnapshot,
     computed_at: datetime,
 ) -> RecommendationResponse:
-    total_minutes, segments, modifier_parts = _compute_lead_minutes(context, snapshot)
-    leave_home_at = snapshot.scheduled_departure - timedelta(minutes=total_minutes)
-
-    modifier_text = ""
-    if modifier_parts:
-        modifier_text = " " + ", ".join(modifier_parts) + "."
-
-    explanation = (
-        f"Base lead {BASE_LEAD_TIME_MINUTES} min + airport baseline ({snapshot.airport_timings.base_tsa_minutes}+{snapshot.airport_timings.check_in_buffer_minutes} min) "
-        f"+ {context.transport_mode.value} offset, {context.confidence_profile.value} profile."
-        f"{modifier_text}"
+    prefs = context.preferences
+    segments = _compute_segments(context, snapshot)
+    base_total = sum(s.duration_minutes for s in segments)
+    multiplier = CONFIDENCE_MULTIPLIERS.get(prefs.confidence_profile, 1.0)
+    adjusted_total = int(round(base_total * multiplier))
+    if prefs.traveling_with_children:
+        adjusted_total += 15
+    adjusted_total += prefs.extra_time_minutes or 0
+    leave_home_at = snapshot.scheduled_departure - timedelta(
+        minutes=adjusted_total + LEAVE_OFFSET_MINUTES
     )
-
+    confidence_score = CONFIDENCE_SCORES.get(prefs.confidence_profile, 0.85)
+    explanation = (
+        f"Drive to {snapshot.origin_airport_code or 'airport'} + airport flow "
+        f"({prefs.confidence_profile.value} profile). "
+        f"Total buffer: {adjusted_total} min."
+    )
+    if prefs.traveling_with_children:
+        explanation += " +15 min for traveling with children."
+    if (prefs.extra_time_minutes or 0) > 0:
+        explanation += f" +{prefs.extra_time_minutes} min extra buffer."
     return RecommendationResponse(
         trip_id=trip_id,
         leave_home_at=leave_home_at,
-        confidence=_confidence_from_profile(context.confidence_profile),
-        confidence_score=0.85
-        if context.confidence_profile == ConfidenceProfile.sweet
-        else (0.9 if context.confidence_profile == ConfidenceProfile.safety else 0.7),
+        confidence=_confidence_from_profile(prefs.confidence_profile),
+        confidence_score=confidence_score,
         explanation=explanation.strip(),
         segments=segments,
         computed_at=computed_at,
