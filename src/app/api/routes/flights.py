@@ -91,48 +91,62 @@ def get_flights(
             enriched.append(flight)
             continue
 
-        # 4. Flight still upcoming (Scheduled, Expected, Departing Late, Unknown, etc.)
-        # Use revised time for catchability only if it's later than scheduled (actual delay)
+        # 4. Flight status says it's still upcoming — verify with actual times
+        flight["canceled"] = False
+        flight["is_boarding"] = False
+
+        # Use the best available departure time
         scheduled_utc = _parse_utc(flight.get("departure_time_utc"))
         revised_utc = _parse_utc(flight.get("revised_departure_utc"))
+        # Use revised time only if it's later than scheduled (actual delay)
         if revised_utc and scheduled_utc and revised_utc > scheduled_utc:
             dep_utc = revised_utc
         else:
             dep_utc = scheduled_utc
 
-        flight["departed"] = False
-        flight["canceled"] = False
-        flight["is_boarding"] = False
-
         if dep_utc is None:
+            flight["departed"] = False
             flight["catchable"] = True
             flight["time_warning"] = None
             enriched.append(flight)
             continue
 
+        # If departure time has passed, treat as departed regardless of status
+        if dep_utc <= now:
+            flight["departed"] = True
+            flight["catchable"] = False
+            flight["time_warning"] = "This flight has already departed"
+            enriched.append(flight)
+            continue
+
+        # Departure is in the future — check if boarding has started
         boarding_time = dep_utc - timedelta(minutes=30)
         mins_until_boarding = int((boarding_time - now).total_seconds() / 60)
 
         if mins_until_boarding <= 0:
-            # Boarding has already started based on time, but status says not departed
-            # Still show it — maybe delayed and boarding hasn't started yet
+            # Boarding time has passed but flight hasn't departed yet
+            flight["departed"] = False
             flight["catchable"] = False
             flight["time_warning"] = "Boarding may have already started"
             enriched.append(flight)
             continue
 
+        # Flight is catchable — check if user has enough time
         if home_address.strip():
             origin_iata = flight.get("origin_iata", "")
             dep_hour = dep_utc.hour
             est = _estimate_min_journey(home_address, origin_iata, dep_hour, drive_cache)
 
             if mins_until_boarding < est:
+                flight["departed"] = False
                 flight["catchable"] = False
                 flight["time_warning"] = f"~{est} min to gate, only {mins_until_boarding} min until boarding"
             else:
+                flight["departed"] = False
                 flight["catchable"] = True
                 flight["time_warning"] = None
         else:
+            flight["departed"] = False
             flight["catchable"] = True
             flight["time_warning"] = None
 
