@@ -82,16 +82,23 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # 2. At Airport (time at curb/check-in area)
-    curb_min = timings["curb_to_checkin"]
-    terminal_info = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at terminal"
-    if curb_min > 0:
+    # 2. At Airport — time from drop-off point to terminal/check-in area
+    # Train/bus users arrive at a transit station (longer walk)
+    # Rideshare/driving/other users arrive at the curb (shorter walk)
+    if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
+        airport_walk = timings["transit_to_terminal"]
+        walk_advice = "Walk from station to terminal"
+    else:
+        airport_walk = timings["curb_to_checkin"]
+        walk_advice = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Walk to terminal"
+
+    if airport_walk > 0:
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
-                duration_minutes=curb_min,
-                advice=terminal_info,
+                duration_minutes=airport_walk,
+                advice=walk_advice,
             )
         )
 
