@@ -121,14 +121,16 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
 
     # 3. Bag drop (only if bags)
+    # Duration includes: time to drop bags + walk from bag drop to TSA checkpoint
     if bag_count > 0:
-        bag_minutes = 5 + (bag_count - 1) * 3
+        bag_drop_time = 5 + (bag_count - 1) * 3
+        bag_total = bag_drop_time + walk_checkin_to_security
         segments.append(
             SegmentDetail(
                 id="bag_drop",
                 label="Bag Drop",
-                duration_minutes=bag_minutes,
-                advice=f"{bag_count} bag(s)|walk_to_next:{walk_checkin_to_security}",
+                duration_minutes=bag_total,
+                advice=f"{bag_count} bag(s)|drop:{bag_drop_time}|walk_to_next:{walk_checkin_to_security}",
             )
         )
 
