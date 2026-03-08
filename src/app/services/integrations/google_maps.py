@@ -32,21 +32,51 @@ def get_airport_destination(iata_code: str) -> str:
     return AIRPORT_DESTINATIONS.get(iata_code.upper() if iata_code else "", f"{iata_code or ''} Airport")
 
 
-def get_drive_time(origin_address: str, airport_iata: str) -> dict:
-    """Get driving duration and distance from origin to airport via Google Directions API."""
+def _travel_label(transport_mode: str, airport_iata: str) -> str:
+    """Return segment label for transport mode and airport."""
+    labels = {
+        "rideshare": f"Ride to {airport_iata}",
+        "driving": f"Drive to {airport_iata}",
+        "train": f"Train to {airport_iata}",
+        "bus": f"Bus to {airport_iata}",
+        "other": f"Travel to {airport_iata}",
+    }
+    return labels.get(transport_mode, f"Travel to {airport_iata}")
+
+
+def get_drive_time(
+    origin_address: str,
+    airport_iata: str,
+    airport_name: str | None = None,
+    transport_mode: str = "rideshare",
+) -> dict:
+    """Get duration and distance from origin to airport via Google Directions API."""
     try:
-        destination = get_airport_destination(airport_iata)
+        destination = airport_name or get_airport_destination(airport_iata)
         url = "https://maps.googleapis.com/maps/api/directions/json"
-        params = {
+        mode = "driving"
+        params: dict[str, str] = {
             "origin": origin_address,
             "destination": destination,
             "key": settings.google_maps_api_key,
-            "mode": "driving",
+            "mode": mode,
         }
+        if transport_mode == "train":
+            params["mode"] = "transit"
+            params["transit_mode"] = "rail"
+        elif transport_mode == "bus":
+            params["mode"] = "transit"
+            params["transit_mode"] = "bus"
+        else:
+            # rideshare, driving, other
+            params["mode"] = "driving"
+
         with httpx.Client() as client:
             response = client.get(url, params=params)
         response.raise_for_status()
         data = response.json()
+
+        label = _travel_label(transport_mode, airport_iata or "airport")
 
         routes = data.get("routes") or []
         if not routes:
@@ -56,6 +86,7 @@ def get_drive_time(origin_address: str, airport_iata: str) -> dict:
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
+                "label": label,
             }
 
         leg = (routes[0].get("legs") or [None])[0]
@@ -66,6 +97,7 @@ def get_drive_time(origin_address: str, airport_iata: str) -> dict:
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
+                "label": label,
             }
 
         duration_info = leg.get("duration_in_traffic") or leg.get("duration")
@@ -76,6 +108,7 @@ def get_drive_time(origin_address: str, airport_iata: str) -> dict:
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
+                "label": label,
             }
 
         duration_seconds = duration_info.get("value", 0)
@@ -88,6 +121,7 @@ def get_drive_time(origin_address: str, airport_iata: str) -> dict:
             "duration_text": duration_text,
             "distance_text": distance_text,
             "source": "google_maps",
+            "label": label,
         }
     except Exception as e:
         logger.exception(
@@ -101,4 +135,5 @@ def get_drive_time(origin_address: str, airport_iata: str) -> dict:
             "duration_text": "~45 mins (estimate)",
             "distance_text": "unknown",
             "source": "fallback",
+            "label": _travel_label(transport_mode, airport_iata or "airport"),
         }

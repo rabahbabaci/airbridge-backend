@@ -35,6 +35,7 @@ def process_trip_intake(
             flight_number=payload.flight_number,
             departure_date=payload.departure_date,
             home_address=payload.home_address,
+            selected_departure_utc=payload.selected_departure_utc,
             preferences=payload.preferences,
             created_at=now,
         )

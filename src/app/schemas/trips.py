@@ -124,6 +124,10 @@ class FlightNumberTripRequest(BaseModel):
         ..., description="Scheduled departure date (YYYY-MM-DD)"
     )
     home_address: str = Field(..., description="Full home/origin address")
+    selected_departure_utc: str | None = Field(
+        None,
+        description="UTC departure time of the user's selected flight, e.g. '2026-03-08 20:16Z'",
+    )
     preferences: TripPreferences = Field(default_factory=TripPreferences)
 
     @field_validator("flight_number", mode="before")
@@ -207,6 +211,7 @@ class TripContext(BaseModel):
 
     # flight_number mode fields
     flight_number: str | None = None
+    selected_departure_utc: str | None = None
 
     # route_search mode fields
     airline: str | None = None

@@ -101,7 +101,18 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
                 trip_context.flight_number, str(trip_context.departure_date)
             )
             if flights:
-                flight = flights[0]
+                selected_utc = (trip_context.selected_departure_utc or "").strip()
+                if selected_utc:
+                    flight = next(
+                        (
+                            f
+                            for f in flights
+                            if (f.get("departure_time_utc") or "").strip() == selected_utc
+                        ),
+                        flights[0],
+                    )
+                else:
+                    flight = flights[0]
                 origin_iata = flight.get("origin_iata")
                 scheduled_departure = _parse_utc_datetime(flight.get("departure_time_utc"))
                 scheduled_arrival = _parse_utc_datetime(flight.get("arrival_time_utc"))

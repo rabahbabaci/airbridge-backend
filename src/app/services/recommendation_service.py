@@ -36,7 +36,6 @@ CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
 
 BOARDING_BUFFER_MINUTES = 15
 RIDESHARE_PICKUP_WAIT_MINUTES = 5
-LEAVE_OFFSET_MINUTES = 30  # boarding starts before departure
 
 
 def _effective_context(
@@ -67,17 +66,21 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     prefs = context.preferences
     segments: list[SegmentDetail] = []
 
-    # 1. Drive to airport
-    drive = get_drive_time(context.home_address, origin_iata)
-    drive_minutes = drive["duration_minutes"]
+    # 1. Transport to airport
+    drive_data = get_drive_time(
+        context.home_address,
+        origin_iata,
+        transport_mode=prefs.transport_mode.value,
+    )
+    drive_minutes = drive_data["duration_minutes"]
     if prefs.transport_mode == TransportMode.rideshare:
         drive_minutes += RIDESHARE_PICKUP_WAIT_MINUTES
     segments.append(
         SegmentDetail(
             id="drive",
-            label=f"Drive to {origin_iata or 'airport'}",
+            label=drive_data.get("label", f"Drive to {origin_iata or 'airport'}"),
             duration_minutes=drive_minutes,
-            advice=f"{drive.get('duration_text', '')} — {drive.get('distance_text', '')}".strip(" — "),
+            advice=f"{drive_data.get('duration_text', '')} — {drive_data.get('distance_text', '')}".strip(" — "),
         )
     )
 
@@ -179,8 +182,9 @@ def _build_response(
     if prefs.traveling_with_children:
         adjusted_total += 15
     adjusted_total += prefs.extra_time_minutes or 0
-    leave_home_at = snapshot.scheduled_departure - timedelta(
-        minutes=adjusted_total + LEAVE_OFFSET_MINUTES
+    # adjusted_total = time to reach gate (includes 15 min buffer at gate); boarding starts 30 min before departure
+    leave_home_at = (
+        snapshot.scheduled_departure - timedelta(minutes=30) - timedelta(minutes=adjusted_total)
     )
     confidence_score = CONFIDENCE_SCORES.get(prefs.confidence_profile, 0.85)
     explanation = (
