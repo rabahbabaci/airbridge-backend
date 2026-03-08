@@ -80,7 +80,8 @@ def get_flights(
             continue
 
         # 3. Flight still upcoming (Scheduled, Expected, Departing Late, Unknown, etc.)
-        dep_utc = _parse_utc(flight.get("departure_time_utc"))
+        # Use revised time for catchability if available (delayed flights)
+        dep_utc = _parse_utc(flight.get("revised_departure_utc") or flight.get("departure_time_utc"))
         flight["departed"] = False
         flight["canceled"] = False
 
