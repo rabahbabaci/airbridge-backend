@@ -20,6 +20,9 @@ TIME_WINDOW_MINUTES: dict[DepartureTimeWindow, tuple[int, int] | None] = {
     DepartureTimeWindow.not_sure: None,
 }
 
+# In-memory cache: "flight_number|date" -> list of flight dicts
+_flight_cache: dict[str, list[dict]] = {}
+
 
 def get_time_window_minutes(
     window: DepartureTimeWindow | None,
@@ -100,9 +103,15 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
     )
     try:
         if trip_context.flight_number and trip_context.departure_date:
-            flights = lookup_flights(
-                trip_context.flight_number, str(trip_context.departure_date)
-            )
+            cache_key = f"{trip_context.flight_number}|{trip_context.departure_date}"
+            if cache_key in _flight_cache:
+                flights = _flight_cache[cache_key]
+            else:
+                flights = lookup_flights(
+                    trip_context.flight_number, str(trip_context.departure_date)
+                )
+                if flights:
+                    _flight_cache[cache_key] = flights
             if flights:
                 selected_utc = (trip_context.selected_departure_utc or "").strip()
                 print(f"DEBUG selected_departure_utc: '{selected_utc}'")
@@ -132,5 +141,6 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
                         airport_timings=_airport_timings_for(origin_iata),
                     )
         return _build_fallback_snapshot(trip_context, airport_code)
-    except Exception:
+    except Exception as e:
+        print(f"DEBUG flight_snapshot error: {e}")
         return _build_fallback_snapshot(trip_context, airport_code)
