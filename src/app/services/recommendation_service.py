@@ -82,16 +82,23 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # 2. At Airport (time at curb/check-in area)
-    curb_min = timings["curb_to_checkin"]
-    terminal_info = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at terminal"
-    if curb_min > 0:
+    # 2. At Airport — time from drop-off point to terminal/check-in area
+    # Train/bus users arrive at a transit station (longer walk)
+    # Rideshare/driving/other users arrive at the curb (shorter walk)
+    if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
+        airport_walk = timings["transit_to_terminal"]
+        walk_advice = "Walk from station to terminal"
+    else:
+        airport_walk = timings["curb_to_checkin"]
+        walk_advice = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Walk to terminal"
+
+    if airport_walk > 0:
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
-                duration_minutes=curb_min,
-                advice=terminal_info,
+                duration_minutes=airport_walk,
+                advice=walk_advice,
             )
         )
 
@@ -170,8 +177,8 @@ def _build_response(
     # Total extra minutes from all sources
     total_extra = multiplier_extra + children_extra + extra_time
 
-    # Add a visible "Comfort buffer" segment if there's any extra time
     if total_extra > 0:
+        # Safety profile or extras — add comfort buffer segment
         advice_parts = []
         if multiplier_extra > 0:
             profile_name = prefs.confidence_profile.value.replace("_", " ").title()
@@ -189,15 +196,21 @@ def _build_response(
             )
         )
 
-    # Now the total of all segments includes everything
-    final_total = sum(s.duration_minutes for s in segments)
+    # Calculate final total:
+    # - If total_extra > 0: raw + buffer (segments already includes comfort_buffer)
+    # - If total_extra == 0: just raw (Just Right, no extras)
+    # - If total_extra < 0: raw reduced by the cut (Cut It Close saves time)
+    if total_extra >= 0:
+        final_total = sum(s.duration_minutes for s in segments)
+    else:
+        # Cut It Close: reduce journey time but don't go below 50% of raw
+        final_total = max(raw_total + total_extra, int(raw_total * 0.5))
 
     # Boarding starts 30 min before departure
     boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
     leave_home_at = boarding_time - timedelta(minutes=final_total)
 
-    # Gate arrival = leave_home_at + all segments except comfort_buffer
-    # (comfort buffer is spent at the gate)
+    # Gate arrival = leave_home_at + raw segment durations (without comfort buffer)
     gate_segments_total = sum(
         s.duration_minutes for s in segments if s.id != "comfort_buffer"
     )
