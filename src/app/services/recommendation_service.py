@@ -23,9 +23,9 @@ from app.services.integrations.tsa_estimator import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
 
 CONFIDENCE_MULTIPLIERS: dict[ConfidenceProfile, float] = {
-    ConfidenceProfile.safety: 1.25,
-    ConfidenceProfile.sweet: 1.0,
-    ConfidenceProfile.risk: 0.85,
+    ConfidenceProfile.safety: 1.35,
+    ConfidenceProfile.sweet: 1.15,
+    ConfidenceProfile.risk: 1.0,
 }
 
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
