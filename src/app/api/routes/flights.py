@@ -9,8 +9,8 @@ from app.services.integrations.tsa_estimator import estimate_tsa_wait
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
-# Statuses that mean the flight is gone
-GONE_STATUSES = {"departed", "landed", "arrived"}
+DEPARTED_STATUSES = {"departed", "landed", "arrived"}
+BOARDING_STATUSES = {"boarding"}
 CANCELED_STATUSES = {"canceled", "cancelled", "diverted"}
 
 
@@ -61,29 +61,48 @@ def get_flights(
     for flight in result:
         status = (flight.get("status") or "Unknown").strip().lower()
 
-        # 1. Flight already departed/landed — show but disable
-        if status in GONE_STATUSES:
+        # 1. Flight already departed/landed
+        if status in DEPARTED_STATUSES:
             flight["departed"] = True
             flight["canceled"] = False
             flight["catchable"] = False
+            flight["is_boarding"] = False
             flight["time_warning"] = "This flight has already departed"
             enriched.append(flight)
             continue
 
-        # 2. Flight canceled — show but disable
+        # 2. Flight currently boarding
+        if status in BOARDING_STATUSES:
+            flight["departed"] = False
+            flight["canceled"] = False
+            flight["catchable"] = False
+            flight["is_boarding"] = True
+            flight["time_warning"] = "This flight is currently boarding"
+            enriched.append(flight)
+            continue
+
+        # 3. Flight canceled
         if status in CANCELED_STATUSES:
             flight["departed"] = False
             flight["canceled"] = True
             flight["catchable"] = False
+            flight["is_boarding"] = False
             flight["time_warning"] = "This flight has been canceled"
             enriched.append(flight)
             continue
 
-        # 3. Flight still upcoming (Scheduled, Expected, Departing Late, Unknown, etc.)
-        # Use revised time for catchability if available (delayed flights)
-        dep_utc = _parse_utc(flight.get("revised_departure_utc") or flight.get("departure_time_utc"))
+        # 4. Flight still upcoming (Scheduled, Expected, Departing Late, Unknown, etc.)
+        # Use revised time for catchability only if it's later than scheduled (actual delay)
+        scheduled_utc = _parse_utc(flight.get("departure_time_utc"))
+        revised_utc = _parse_utc(flight.get("revised_departure_utc"))
+        if revised_utc and scheduled_utc and revised_utc > scheduled_utc:
+            dep_utc = revised_utc
+        else:
+            dep_utc = scheduled_utc
+
         flight["departed"] = False
         flight["canceled"] = False
+        flight["is_boarding"] = False
 
         if dep_utc is None:
             flight["catchable"] = True
