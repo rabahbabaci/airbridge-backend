@@ -76,73 +76,62 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         drive_minutes += RIDESHARE_PICKUP_WAIT_MINUTES
     segments.append(
         SegmentDetail(
-            id="drive",
+            id="transport",
             label=drive_data.get("label", f"Drive to {origin_iata or 'airport'}"),
             duration_minutes=drive_minutes,
             advice=f"{drive_data.get('duration_text', '')} — {drive_data.get('distance_text', '')}".strip(" — "),
         )
     )
 
-    # 2. Curb to check-in
+    # 2. At Airport (curb to check-in area)
     curb_min = timings["curb_to_checkin"]
+    terminal_info = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at terminal"
     if curb_min > 0:
         segments.append(
             SegmentDetail(
-                id="curb_to_checkin",
-                label="Curb to check-in",
+                id="at_airport",
+                label="At Airport",
                 duration_minutes=curb_min,
-                advice="",
+                advice=terminal_info,
             )
         )
 
-    # 3. Bag drop
+    # 3. Bag drop (only if bags)
     bag_count = prefs.bag_count or 0
     if bag_count > 0:
         bag_minutes = 5 + (bag_count - 1) * 3
         segments.append(
             SegmentDetail(
                 id="bag_drop",
-                label="Bag drop",
+                label="Bag Drop",
                 duration_minutes=bag_minutes,
                 advice=f"{bag_count} bag(s)",
             )
         )
 
-    # 4. Check-in to security
+    # 4. TSA Security (merge walk_to_security + TSA wait)
     checkin_to_sec = timings["checkin_to_security"]
-    segments.append(
-        SegmentDetail(
-            id="walk_to_security",
-            label="Walk to security",
-            duration_minutes=checkin_to_sec,
-            advice="",
-        )
-    )
-
-    # 5. TSA Security
     departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
     tsa = estimate_tsa_wait(origin_iata, departure_hour)
+    tsa_total = checkin_to_sec + tsa["estimated_minutes"]
     segments.append(
         SegmentDetail(
             id="tsa",
-            label=f"TSA Security ({origin_iata})",
-            duration_minutes=tsa["estimated_minutes"],
+            label=f"TSA Security ({origin_iata})" if origin_iata else "TSA Security",
+            duration_minutes=tsa_total,
             advice=tsa.get("period", ""),
         )
     )
 
-    # 6. Walk to gate
+    # 5. Gate (walk from security to gate)
     gate_walk = timings["security_to_gate"]
-    gate_advice_parts = []
-    if snapshot.departure_terminal:
-        gate_advice_parts.append(f"Terminal {snapshot.departure_terminal}")
-    # Gate number isn't on FlightSnapshot; we only have departure_terminal
+    gate_advice = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at gate"
     segments.append(
         SegmentDetail(
             id="walk_to_gate",
-            label="Walk to gate",
+            label="Gate",
             duration_minutes=gate_walk,
-            advice=", ".join(gate_advice_parts) if gate_advice_parts else "",
+            advice=gate_advice,
         )
     )
 
