@@ -41,6 +41,9 @@ class RecommendationResponse(BaseModel):
     leave_home_at: datetime = Field(
         ..., description="Recommended time to leave home (UTC)"
     )
+    gate_arrival_utc: datetime | None = Field(
+        None, description="Estimated gate arrival time (UTC)"
+    )
     confidence: ConfidenceLevel
     confidence_score: float = Field(
         ..., ge=0.0, le=1.0, description="Confidence score between 0 and 1"

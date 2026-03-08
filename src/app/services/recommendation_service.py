@@ -34,7 +34,6 @@ CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
     ConfidenceProfile.risk: 0.70,
 }
 
-BOARDING_BUFFER_MINUTES = 15
 RIDESHARE_PICKUP_WAIT_MINUTES = 5
 
 
@@ -147,16 +146,6 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # 7. Boarding buffer
-    segments.append(
-        SegmentDetail(
-            id="boarding_buffer",
-            label="Boarding buffer",
-            duration_minutes=BOARDING_BUFFER_MINUTES,
-            advice="Be at gate before boarding begins",
-        )
-    )
-
     return segments
 
 
@@ -176,29 +165,69 @@ def _build_response(
 ) -> RecommendationResponse:
     prefs = context.preferences
     segments = _compute_segments(context, snapshot)
-    base_total = sum(s.duration_minutes for s in segments)
+    raw_total = sum(s.duration_minutes for s in segments)
+
+    # Apply confidence multiplier to get adjusted total
     multiplier = CONFIDENCE_MULTIPLIERS.get(prefs.confidence_profile, 1.0)
-    adjusted_total = int(round(base_total * multiplier))
-    if prefs.traveling_with_children:
-        adjusted_total += 15
-    adjusted_total += prefs.extra_time_minutes or 0
-    # adjusted_total = time to reach gate (includes 15 min buffer at gate); boarding starts 30 min before departure
-    leave_home_at = (
-        snapshot.scheduled_departure - timedelta(minutes=30) - timedelta(minutes=adjusted_total)
+    adjusted_total = int(round(raw_total * multiplier))
+    multiplier_extra = adjusted_total - raw_total
+
+    # Additional buffers
+    children_extra = 15 if prefs.traveling_with_children else 0
+    extra_time = prefs.extra_time_minutes or 0
+
+    # Total extra minutes from all sources
+    total_extra = multiplier_extra + children_extra + extra_time
+
+    # Add a visible "Comfort buffer" segment if there's any extra time
+    if total_extra > 0:
+        advice_parts = []
+        if multiplier_extra > 0:
+            profile_name = prefs.confidence_profile.value.replace("_", " ").title()
+            advice_parts.append(f"{profile_name} profile buffer")
+        if children_extra > 0:
+            advice_parts.append("traveling with children")
+        if extra_time > 0:
+            advice_parts.append(f"+{extra_time} min extra time")
+        segments.append(
+            SegmentDetail(
+                id="comfort_buffer",
+                label="Comfort buffer",
+                duration_minutes=total_extra,
+                advice=", ".join(advice_parts),
+            )
+        )
+
+    # Now the total of all segments includes everything
+    final_total = sum(s.duration_minutes for s in segments)
+
+    # Boarding starts 30 min before departure
+    boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
+    leave_home_at = boarding_time - timedelta(minutes=final_total)
+
+    # Gate arrival = leave_home_at + all segments except comfort_buffer
+    # (comfort buffer is spent at the gate)
+    gate_segments_total = sum(
+        s.duration_minutes for s in segments if s.id != "comfort_buffer"
     )
+    gate_arrival_at = leave_home_at + timedelta(minutes=gate_segments_total)
+
     confidence_score = CONFIDENCE_SCORES.get(prefs.confidence_profile, 0.85)
+
+    transport_label = segments[0].label if segments else "Drive to airport"
     explanation = (
-        f"Drive to {snapshot.origin_airport_code or 'airport'} + airport flow "
-        f"({prefs.confidence_profile.value} profile). "
-        f"Total buffer: {adjusted_total} min."
+        f"{transport_label}, {prefs.confidence_profile.value.replace('_', ' ').title()} profile. "
+        f"Raw journey: {raw_total} min, with {total_extra} min buffer."
     )
     if prefs.traveling_with_children:
-        explanation += " +15 min for traveling with children."
-    if (prefs.extra_time_minutes or 0) > 0:
-        explanation += f" +{prefs.extra_time_minutes} min extra buffer."
+        explanation += " Includes +15 min for children."
+    if extra_time > 0:
+        explanation += f" Includes +{extra_time} min extra time."
+
     return RecommendationResponse(
         trip_id=trip_id,
         leave_home_at=leave_home_at,
+        gate_arrival_utc=gate_arrival_at,
         confidence=_confidence_from_profile(prefs.confidence_profile),
         confidence_score=confidence_score,
         explanation=explanation.strip(),
