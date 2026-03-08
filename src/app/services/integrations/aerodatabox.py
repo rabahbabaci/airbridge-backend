@@ -14,9 +14,21 @@ def parse_flight(raw: dict) -> dict:
     departure_airport = departure.get("airport") or {}
     arrival_airport = arrival.get("airport") or {}
     scheduled_dep = departure.get("scheduledTime") or {}
+    revised_dep = departure.get("revisedTime") or {}
     scheduled_arr = arrival.get("scheduledTime") or {}
+    revised_arr = arrival.get("revisedTime") or {}
     airline = raw.get("airline") or {}
     aircraft = raw.get("aircraft") or {}
+
+    # Use revised time if available (for delayed flights), fall back to scheduled
+    dep_utc = revised_dep.get("utc") or scheduled_dep.get("utc")
+    dep_local = revised_dep.get("local") or scheduled_dep.get("local")
+    arr_utc = revised_arr.get("utc") or scheduled_arr.get("utc")
+    arr_local = revised_arr.get("local") or scheduled_arr.get("local")
+
+    # Track if flight is delayed
+    is_delayed = bool(revised_dep.get("utc"))
+    status = raw.get("status", "Unknown")
 
     return {
         "flight_number": raw.get("number"),
@@ -25,14 +37,17 @@ def parse_flight(raw: dict) -> dict:
         "origin_name": departure_airport.get("name"),
         "destination_iata": arrival_airport.get("iata"),
         "destination_name": arrival_airport.get("name"),
-        "departure_time_local": scheduled_dep.get("local"),
-        "departure_time_utc": scheduled_dep.get("utc"),
-        "arrival_time_local": scheduled_arr.get("local"),
-        "arrival_time_utc": scheduled_arr.get("utc"),
+        "departure_time_local": dep_local,
+        "departure_time_utc": dep_utc,
+        "scheduled_departure_local": scheduled_dep.get("local"),
+        "scheduled_departure_utc": scheduled_dep.get("utc"),
+        "arrival_time_local": arr_local,
+        "arrival_time_utc": arr_utc,
         "departure_terminal": departure.get("terminal"),
         "departure_gate": departure.get("gate"),
         "arrival_terminal": arrival.get("terminal"),
-        "status": raw.get("status", "Unknown"),
+        "status": status,
+        "is_delayed": is_delayed,
         "aircraft_model": aircraft.get("model"),
     }
 
