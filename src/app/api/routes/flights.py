@@ -9,6 +9,10 @@ from app.services.integrations.tsa_estimator import estimate_tsa_wait
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
+# Statuses that mean the flight is gone
+GONE_STATUSES = {"departed", "landed", "arrived"}
+CANCELED_STATUSES = {"canceled", "cancelled", "diverted"}
+
 
 def _parse_utc(utc_str: str | None) -> datetime | None:
     if not utc_str:
@@ -20,19 +24,15 @@ def _parse_utc(utc_str: str | None) -> datetime | None:
 
 
 def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: int, cache: dict) -> int:
-    """Estimate minimum door-to-gate time using Google Maps + static airport data."""
     if origin_iata in cache:
         return cache[origin_iata]
-
     try:
         drive_data = get_drive_time(home_address, origin_iata, transport_mode="driving")
         drive_min = drive_data.get("duration_minutes", 60)
     except Exception:
         drive_min = 60
-
     timings = get_airport_timings(origin_iata)
     tsa = estimate_tsa_wait(origin_iata, departure_hour)
-
     total = (
         drive_min
         + timings["curb_to_checkin"]
@@ -59,24 +59,47 @@ def get_flights(
 
     enriched = []
     for flight in result:
-        dep_utc = _parse_utc(flight.get("departure_time_utc"))
+        status = (flight.get("status") or "Unknown").strip().lower()
 
-        if dep_utc is None:
-            flight["departed"] = False
-            flight["catchable"] = True
-            flight["time_warning"] = None
-            enriched.append(flight)
-            continue
-
-        if dep_utc <= now:
+        # 1. Flight already departed/landed — show but disable
+        if status in GONE_STATUSES:
             flight["departed"] = True
+            flight["canceled"] = False
             flight["catchable"] = False
             flight["time_warning"] = "This flight has already departed"
             enriched.append(flight)
             continue
 
+        # 2. Flight canceled — show but disable
+        if status in CANCELED_STATUSES:
+            flight["departed"] = False
+            flight["canceled"] = True
+            flight["catchable"] = False
+            flight["time_warning"] = "This flight has been canceled"
+            enriched.append(flight)
+            continue
+
+        # 3. Flight still upcoming (Scheduled, Expected, Departing Late, Unknown, etc.)
+        dep_utc = _parse_utc(flight.get("departure_time_utc"))
+        flight["departed"] = False
+        flight["canceled"] = False
+
+        if dep_utc is None:
+            flight["catchable"] = True
+            flight["time_warning"] = None
+            enriched.append(flight)
+            continue
+
         boarding_time = dep_utc - timedelta(minutes=30)
         mins_until_boarding = int((boarding_time - now).total_seconds() / 60)
+
+        if mins_until_boarding <= 0:
+            # Boarding has already started based on time, but status says not departed
+            # Still show it — maybe delayed and boarding hasn't started yet
+            flight["catchable"] = False
+            flight["time_warning"] = "Boarding may have already started"
+            enriched.append(flight)
+            continue
 
         if home_address.strip():
             origin_iata = flight.get("origin_iata", "")
@@ -84,15 +107,12 @@ def get_flights(
             est = _estimate_min_journey(home_address, origin_iata, dep_hour, drive_cache)
 
             if mins_until_boarding < est:
-                flight["departed"] = False
                 flight["catchable"] = False
                 flight["time_warning"] = f"~{est} min to gate, only {mins_until_boarding} min until boarding"
             else:
-                flight["departed"] = False
                 flight["catchable"] = True
                 flight["time_warning"] = None
         else:
-            flight["departed"] = False
             flight["catchable"] = True
             flight["time_warning"] = None
 
