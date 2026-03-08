@@ -1,6 +1,9 @@
 """Build flight snapshot from trip context. Uses AeroDataBox for live flight data."""
 
+import logging
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.flight_snapshot import AirportTimings, FlightSnapshot
 from app.schemas.trips import TripContext, DepartureTimeWindow
@@ -102,6 +105,8 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
             )
             if flights:
                 selected_utc = (trip_context.selected_departure_utc or "").strip()
+                print(f"DEBUG selected_departure_utc: '{selected_utc}'")
+                print(f"DEBUG available flights: {[(f.get('departure_time_utc'), f.get('origin_iata')) for f in flights]}")
                 if selected_utc:
                     flight = next(
                         (
@@ -113,6 +118,7 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
                     )
                 else:
                     flight = flights[0]
+                print(f"DEBUG matched: {flight.get('departure_time_utc')} {flight.get('origin_iata')} -> {flight.get('destination_iata')}")
                 origin_iata = flight.get("origin_iata")
                 scheduled_departure = _parse_utc_datetime(flight.get("departure_time_utc"))
                 scheduled_arrival = _parse_utc_datetime(flight.get("arrival_time_utc"))
