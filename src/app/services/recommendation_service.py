@@ -59,13 +59,12 @@ def _effective_context(
 
 
 def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[SegmentDetail]:
-    """Build ordered journey segments from context and snapshot using real integrations."""
     origin_iata = snapshot.origin_airport_code or ""
     timings = get_airport_timings(origin_iata)
     prefs = context.preferences
     segments: list[SegmentDetail] = []
 
-    # 1. Transport to airport
+    # 1. Transport to airport (travel time)
     drive_data = get_drive_time(
         context.home_address,
         origin_iata,
@@ -83,7 +82,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # 2. At Airport (curb to check-in area)
+    # 2. At Airport (time at curb/check-in area)
     curb_min = timings["curb_to_checkin"]
     terminal_info = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at terminal"
     if curb_min > 0:
@@ -109,17 +108,20 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
             )
         )
 
-    # 4. TSA Security (merge walk_to_security + TSA wait)
+    # 4. TSA Security — walk to security is the "travel" part, TSA wait is the "at" part
+    # We encode both in one segment: duration = walk + wait, advice includes the split
     checkin_to_sec = timings["checkin_to_security"]
     departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
     tsa = estimate_tsa_wait(origin_iata, departure_hour)
-    tsa_total = checkin_to_sec + tsa["estimated_minutes"]
+    tsa_wait = tsa["estimated_minutes"]
+    tsa_total = checkin_to_sec + tsa_wait
+    tsa_period = tsa.get("period", "")
     segments.append(
         SegmentDetail(
             id="tsa",
             label=f"TSA Security ({origin_iata})" if origin_iata else "TSA Security",
             duration_minutes=tsa_total,
-            advice=tsa.get("period", ""),
+            advice=f"walk:{checkin_to_sec}|wait:{tsa_wait}|{tsa_period}",
         )
     )
 
