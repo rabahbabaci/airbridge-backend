@@ -1,0 +1,49 @@
+{
+  "nodes": {
+    "curb:main": {"type": "curb", "terminal": "main", "label": "Main Terminal Departures Curb"},
+    "curb:N": {"type": "curb", "terminal": "N", "label": "North Satellite Curb (via Main)"},
+    "curb:S": {"type": "curb", "terminal": "S", "label": "South Satellite Curb (via Main)"},
+    "parking:garage": {"type": "parking", "label": "Airport Parking Garage"},
+    "parking:remote": {"type": "parking", "label": "Remote Parking Lot"},
+    "transit:link": {"type": "transit", "label": "Link Light Rail Station"},
+    "checkin:main": {"type": "checkin", "terminal": "main", "label": "Main Terminal Check-in"},
+    "tsa:central": {"type": "tsa", "terminal": "main", "label": "Central TSA Checkpoint"},
+    "tsa:north": {"type": "tsa", "terminal": "main", "label": "North TSA Checkpoint"},
+    "gates:A": {"type": "gates", "terminal": "main", "label": "Concourse A Gates", "gates": ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12", "A13", "A14"]},
+    "gates:B_near": {"type": "gates", "terminal": "main", "label": "Concourse B Gates (near)", "gates": ["B1", "B2", "B3", "B4", "B5", "B6", "B7"]},
+    "gates:B_far": {"type": "gates", "terminal": "main", "label": "Concourse B Gates (far)", "gates": ["B8", "B9", "B10", "B11", "B12", "B13", "B14", "B15"]},
+    "gates:C": {"type": "gates", "terminal": "main", "label": "Concourse C Gates", "gates": ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "C15", "C16", "C17", "C18"]},
+    "gates:D": {"type": "gates", "terminal": "main", "label": "Concourse D Gates", "gates": ["D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12"]},
+    "gates:N_near": {"type": "gates", "terminal": "N", "label": "North Satellite (near)", "gates": ["N1", "N2", "N3", "N4", "N5", "N6", "N7", "N8"]},
+    "gates:N_far": {"type": "gates", "terminal": "N", "label": "North Satellite (far)", "gates": ["N9", "N10", "N11", "N12", "N13", "N14", "N15", "N16", "N17", "N18", "N19", "N20"]},
+    "gates:S_near": {"type": "gates", "terminal": "S", "label": "South Satellite (near)", "gates": ["S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8"]},
+    "gates:S_far": {"type": "gates", "terminal": "S", "label": "South Satellite (far)", "gates": ["S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16"]}
+  },
+  "edges": [
+    ["curb:main", "checkin:main", 4],
+    ["parking:garage", "checkin:main", 8],
+    ["parking:remote", "checkin:main", 15],
+    ["transit:link", "checkin:main", 10],
+    ["checkin:main", "tsa:central", 3],
+    ["checkin:main", "tsa:north", 5],
+    ["tsa:central", "gates:A", 6],
+    ["tsa:central", "gates:B_near", 5],
+    ["tsa:central", "gates:B_far", 8],
+    ["tsa:central", "gates:C", 7],
+    ["tsa:central", "gates:D", 8],
+    ["tsa:north", "gates:A", 5],
+    ["tsa:north", "gates:B_near", 7],
+    ["tsa:central", "gates:N_near", 12],
+    ["tsa:central", "gates:N_far", 15],
+    ["tsa:central", "gates:S_near", 12],
+    ["tsa:central", "gates:S_far", 16]
+  ],
+  "defaults": {
+    "terminal": "main",
+    "curb_to_checkin": 4,
+    "checkin_to_security": 3,
+    "security_to_gate_median": 8,
+    "parking_to_checkin": 10,
+    "transit_to_checkin": 10
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "nodes": {
+    "curb:A": {"type": "curb", "terminal": "A", "label": "Terminal A Departures Curb"},
+    "curb:B": {"type": "curb", "terminal": "B", "label": "Terminal B Departures Curb"},
+    "parking:garage": {"type": "parking", "label": "Airport Parking Garage"},
+    "parking:economy": {"type": "parking", "label": "Economy Lot"},
+    "transit:vta": {"type": "transit", "label": "VTA Light Rail Station"},
+    "checkin:A": {"type": "checkin", "terminal": "A", "label": "Terminal A Check-in"},
+    "checkin:B": {"type": "checkin", "terminal": "B", "label": "Terminal B Check-in"},
+    "tsa:A": {"type": "tsa", "terminal": "A", "label": "Terminal A TSA Checkpoint"},
+    "tsa:B": {"type": "tsa", "terminal": "B", "label": "Terminal B TSA Checkpoint"},
+    "gates:A_near": {"type": "gates", "terminal": "A", "label": "Terminal A Gates (near)", "gates": ["A1", "A2", "A3", "A4", "A5", "A6", "A7"]},
+    "gates:A_far": {"type": "gates", "terminal": "A", "label": "Terminal A Gates (far)", "gates": ["A8", "A9", "A10", "A11", "A12", "A13", "A14", "A15"]},
+    "gates:B_near": {"type": "gates", "terminal": "B", "label": "Terminal B Gates (near)", "gates": ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8"]},
+    "gates:B_far": {"type": "gates", "terminal": "B", "label": "Terminal B Gates (far)", "gates": ["B9", "B10", "B11", "B12", "B13", "B14", "B15", "B16", "B17"]}
+  },
+  "edges": [
+    ["curb:A", "checkin:A", 2],
+    ["curb:B", "checkin:B", 2],
+    ["parking:garage", "checkin:A", 7],
+    ["parking:garage", "checkin:B", 8],
+    ["parking:economy", "checkin:A", 11],
+    ["transit:vta", "checkin:A", 10],
+    ["transit:vta", "checkin:B", 12],
+    ["checkin:A", "tsa:A", 2],
+    ["checkin:B", "tsa:B", 2],
+    ["tsa:A", "gates:A_near", 4],
+    ["tsa:A", "gates:A_far", 7],
+    ["tsa:B", "gates:B_near", 4],
+    ["tsa:B", "gates:B_far", 8],
+    ["checkin:A", "checkin:B", 6]
+  ],
+  "defaults": {
+    "terminal": "A",
+    "curb_to_checkin": 2,
+    "checkin_to_security": 2,
+    "security_to_gate_median": 6,
+    "parking_to_checkin": 8,
+    "transit_to_checkin": 11
+  }
+}

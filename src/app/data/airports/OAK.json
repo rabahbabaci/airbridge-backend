@@ -1,0 +1,41 @@
+{
+  "nodes": {
+    "curb:1": {"type": "curb", "terminal": "1", "label": "Terminal 1 Departures Curb"},
+    "curb:2": {"type": "curb", "terminal": "2", "label": "Terminal 2 Departures Curb"},
+    "parking:garage": {"type": "parking", "label": "Airport Parking Garage"},
+    "parking:economy": {"type": "parking", "label": "Economy Lot"},
+    "transit:bart": {"type": "transit", "label": "Oakland Airport BART Connector"},
+    "checkin:1": {"type": "checkin", "terminal": "1", "label": "Terminal 1 Check-in"},
+    "checkin:2": {"type": "checkin", "terminal": "2", "label": "Terminal 2 Check-in"},
+    "tsa:1": {"type": "tsa", "terminal": "1", "label": "Terminal 1 TSA Checkpoint"},
+    "tsa:2": {"type": "tsa", "terminal": "2", "label": "Terminal 2 TSA Checkpoint"},
+    "gates:1_near": {"type": "gates", "terminal": "1", "label": "Terminal 1 Gates (near)", "gates": ["1", "2", "3", "4", "5", "6", "7", "8"]},
+    "gates:1_far": {"type": "gates", "terminal": "1", "label": "Terminal 1 Gates (far)", "gates": ["9", "10", "11", "12", "13", "14", "15"]},
+    "gates:2_near": {"type": "gates", "terminal": "2", "label": "Terminal 2 Gates (near)", "gates": ["20", "21", "22", "23", "24", "25"]},
+    "gates:2_far": {"type": "gates", "terminal": "2", "label": "Terminal 2 Gates (far)", "gates": ["26", "27", "28", "29", "30", "31", "32"]}
+  },
+  "edges": [
+    ["curb:1", "checkin:1", 2],
+    ["curb:2", "checkin:2", 2],
+    ["parking:garage", "checkin:1", 7],
+    ["parking:garage", "checkin:2", 8],
+    ["parking:economy", "checkin:1", 12],
+    ["transit:bart", "checkin:1", 8],
+    ["transit:bart", "checkin:2", 10],
+    ["checkin:1", "tsa:1", 2],
+    ["checkin:2", "tsa:2", 2],
+    ["tsa:1", "gates:1_near", 4],
+    ["tsa:1", "gates:1_far", 7],
+    ["tsa:2", "gates:2_near", 4],
+    ["tsa:2", "gates:2_far", 7],
+    ["checkin:1", "checkin:2", 5]
+  ],
+  "defaults": {
+    "terminal": "1",
+    "curb_to_checkin": 2,
+    "checkin_to_security": 2,
+    "security_to_gate_median": 5,
+    "parking_to_checkin": 8,
+    "transit_to_checkin": 9
+  }
+}
