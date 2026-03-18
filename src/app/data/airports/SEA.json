@@ -1,8 +1,6 @@
 {
   "nodes": {
     "curb:main": {"type": "curb", "terminal": "main", "label": "Main Terminal Departures Curb"},
-    "curb:N": {"type": "curb", "terminal": "N", "label": "North Satellite Curb (via Main)"},
-    "curb:S": {"type": "curb", "terminal": "S", "label": "South Satellite Curb (via Main)"},
     "parking:garage": {"type": "parking", "label": "Airport Parking Garage"},
     "parking:remote": {"type": "parking", "label": "Remote Parking Lot"},
     "transit:link": {"type": "transit", "label": "Link Light Rail Station"},

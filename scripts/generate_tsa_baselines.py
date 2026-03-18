@@ -5,10 +5,7 @@ import math
 import os
 import sys
 
-# Add project root to path so we can import from src
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-from app.services.integrations.tsa_estimator import TSA_DATA
+from tsa_estimator import TSA_DATA
 
 # Default for airports not in TSA_DATA
 DEFAULT_TSA = (8, 15, 25)  # (off_peak, average, peak)

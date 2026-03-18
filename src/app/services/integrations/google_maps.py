@@ -94,6 +94,9 @@ def _fetch_traffic_variants(
                 _fetch_distance_matrix(client, origin, destination, departure_time, "optimistic"),
             )
 
+    # NOTE: asyncio.run() creates a new event loop. This works because FastAPI runs
+    # sync endpoints in a threadpool. If any endpoint becomes async def, this will
+    # raise RuntimeError — refactor to use await directly in that case.
     try:
         pessimistic_min, optimistic_min = asyncio.run(_run())
     except Exception:
@@ -143,7 +146,7 @@ def get_drive_time(
         if departure_time is not None and departure_time > int(time.time()):
             params["departure_time"] = str(departure_time)
 
-        with httpx.Client() as client:
+        with httpx.Client(timeout=10) as client:
             response = client.get(url, params=params)
         response.raise_for_status()
         data = response.json()

@@ -10,6 +10,7 @@ from app.schemas.trips import (
 
 # In-memory store: trip_id (str) -> TripContext. Used by recommendation flow until real persistence exists.
 _trip_store: dict[str, TripContext] = {}
+_TRIP_STORE_MAX = 1000
 
 
 def get_trip_context(trip_id: str) -> TripContext | None:
@@ -53,5 +54,8 @@ def process_trip_intake(
             created_at=now,
         )
 
+    if len(_trip_store) >= _TRIP_STORE_MAX:
+        oldest_key = next(iter(_trip_store))
+        del _trip_store[oldest_key]
     _trip_store[str(trip_id)] = ctx
     return ctx

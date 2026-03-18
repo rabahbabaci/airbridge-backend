@@ -17,13 +17,6 @@ class AppError(Exception):
         super().__init__(message)
 
 
-class InvalidInputError(AppError):
-    def __init__(self, message: str, details: Any = None) -> None:
-        super().__init__(
-            code="INVALID_INPUT", message=message, details=details, status_code=422
-        )
-
-
 class UnsupportedModeError(AppError):
     def __init__(self, mode: str) -> None:
         super().__init__(

@@ -11,8 +11,6 @@ from app.services.trip_intake import process_trip_intake
 
 router = APIRouter(prefix="/trips", tags=["trips"])
 
-_SUPPORTED_MODES = {"flight_number", "route_search"}
-
 
 @router.post("", response_model=TripContext, status_code=201)
 def post_trip(payload: TripRequest) -> TripContext:

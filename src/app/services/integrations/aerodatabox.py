@@ -69,7 +69,7 @@ def lookup_flights(flight_number: str, date_str: str) -> list[dict]:
             "withLocation": "false",
             "dateLocalRole": "Departure",
         }
-        with httpx.Client() as client:
+        with httpx.Client(timeout=10) as client:
             response = client.get(url, headers=headers, params=params)
         if response.status_code != 200:
             logger.warning(
