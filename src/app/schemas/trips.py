@@ -42,6 +42,7 @@ class TripPreferenceOverrides(BaseModel):
     extra_time_minutes: int | None = None  # 0, 15, or 30
     has_boarding_pass: bool | None = None
     security_access: SecurityAccess | None = None
+    gate_time_minutes: int | None = None
 
     @field_validator("bag_count")
     @classmethod
@@ -63,6 +64,13 @@ class TripPreferenceOverrides(BaseModel):
                 return n
         raise ValueError("extra_time_minutes must be 0, 15, or 30")
 
+    @field_validator("gate_time_minutes")
+    @classmethod
+    def gate_time_range(cls, v: int | None) -> int | None:
+        if v is not None and (v < 0 or v > 120):
+            raise ValueError("gate_time_minutes must be between 0 and 120")
+        return v
+
 
 class TripPreferences(BaseModel):
     transport_mode: TransportMode = TransportMode.driving
@@ -72,6 +80,14 @@ class TripPreferences(BaseModel):
     extra_time_minutes: ExtraTimeMinutes = 0
     has_boarding_pass: bool = True
     security_access: SecurityAccess = SecurityAccess.none
+    gate_time_minutes: int | None = None
+
+    @field_validator("gate_time_minutes")
+    @classmethod
+    def gate_time_range(cls, v: int | None) -> int | None:
+        if v is not None and (v < 0 or v > 120):
+            raise ValueError("gate_time_minutes must be between 0 and 120")
+        return v
 
     @field_validator("bag_count", mode="before")
     @classmethod

@@ -55,6 +55,8 @@ def _effective_context(
         prefs_updates["traveling_with_children"] = overrides.traveling_with_children
     if overrides.extra_time_minutes is not None:
         prefs_updates["extra_time_minutes"] = overrides.extra_time_minutes
+    if overrides.gate_time_minutes is not None:
+        prefs_updates["gate_time_minutes"] = overrides.gate_time_minutes
     new_prefs = context.preferences.model_copy(update=prefs_updates)
     return context.model_copy(update={"preferences": new_prefs})
 
@@ -230,7 +232,10 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     )
 
     # 6. Gate buffer — time at gate before boarding starts
-    gate_buffer = GATE_BUFFER_MINUTES.get(prefs.confidence_profile, 15)
+    if prefs.gate_time_minutes is not None:
+        gate_buffer = prefs.gate_time_minutes
+    else:
+        gate_buffer = GATE_BUFFER_MINUTES.get(prefs.confidence_profile, 15)
     if gate_buffer > 0:
         segments.append(
             SegmentDetail(
