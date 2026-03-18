@@ -23,7 +23,7 @@ def _parse_utc(utc_str: str | None) -> datetime | None:
         return None
 
 
-def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: int, cache: dict) -> int:
+def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: int | None, cache: dict) -> int:
     if origin_iata in cache:
         return cache[origin_iata]
     try:
@@ -32,7 +32,7 @@ def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: i
     except Exception:
         drive_min = 60
     timings = get_airport_timings(origin_iata)
-    tsa = estimate_tsa_wait(origin_iata, departure_hour)
+    tsa = estimate_tsa_wait(origin_iata, departure_hour or 12)
     total = (
         drive_min
         + timings["curb_to_checkin"]
@@ -134,7 +134,16 @@ def get_flights(
         # Flight is catchable — check if user has enough time
         if home_address.strip():
             origin_iata = flight.get("origin_iata", "")
-            dep_hour = dep_utc.hour
+            # Use local departure hour for TSA estimates
+            dep_local_str = flight.get("revised_departure_local") or flight.get("departure_time_local")
+            dep_hour: int | None = None
+            if dep_local_str:
+                try:
+                    dep_hour = datetime.fromisoformat(dep_local_str.strip()).hour
+                except (ValueError, TypeError):
+                    pass
+            if dep_hour is None:
+                dep_hour = dep_utc.hour  # fallback to UTC
             est = _estimate_min_journey(home_address, origin_iata, dep_hour, drive_cache)
 
             if mins_until_boarding < est:

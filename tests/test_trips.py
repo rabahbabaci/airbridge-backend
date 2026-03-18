@@ -67,35 +67,39 @@ class TestFlightNumberMode:
 
     def test_preference_fields_defaults_in_response(self, client: TestClient) -> None:
         body = client.post("/v1/trips", json=FLIGHT_NUMBER_PAYLOAD).json()
-        assert body["transport_mode"] == "driving"
-        assert body["confidence_profile"] == "sweet"
-        assert body["bag_count"] == 0
-        assert body["traveling_with_children"] is False
-        assert body["extra_time_minutes"] == 0
+        prefs = body["preferences"]
+        assert prefs["transport_mode"] == "driving"
+        assert prefs["confidence_profile"] == "sweet"
+        assert prefs["bag_count"] == 0
+        assert prefs["traveling_with_children"] is False
+        assert prefs["extra_time_minutes"] == 0
 
     def test_preference_fields_accepted_and_returned(self, client: TestClient) -> None:
         payload = {
             **FLIGHT_NUMBER_PAYLOAD,
-            "transport_mode": "rideshare",
-            "confidence_profile": "safety",
-            "bag_count": 2,
-            "traveling_with_children": True,
-            "extra_time_minutes": 15,
+            "preferences": {
+                "transport_mode": "rideshare",
+                "confidence_profile": "safety",
+                "bag_count": 2,
+                "traveling_with_children": True,
+                "extra_time_minutes": 15,
+            },
         }
         body = client.post("/v1/trips", json=payload).json()
-        assert body["transport_mode"] == "rideshare"
-        assert body["confidence_profile"] == "safety"
-        assert body["bag_count"] == 2
-        assert body["traveling_with_children"] is True
-        assert body["extra_time_minutes"] == 15
+        prefs = body["preferences"]
+        assert prefs["transport_mode"] == "rideshare"
+        assert prefs["confidence_profile"] == "safety"
+        assert prefs["bag_count"] == 2
+        assert prefs["traveling_with_children"] is True
+        assert prefs["extra_time_minutes"] == 15
 
     def test_bag_count_out_of_range_returns_422(self, client: TestClient) -> None:
-        payload = {**FLIGHT_NUMBER_PAYLOAD, "bag_count": 5}
+        payload = {**FLIGHT_NUMBER_PAYLOAD, "preferences": {"bag_count": 11}}
         response = client.post("/v1/trips", json=payload)
         assert response.status_code == 422
 
     def test_extra_time_minutes_invalid_returns_422(self, client: TestClient) -> None:
-        payload = {**FLIGHT_NUMBER_PAYLOAD, "extra_time_minutes": 20}
+        payload = {**FLIGHT_NUMBER_PAYLOAD, "preferences": {"extra_time_minutes": 20}}
         response = client.post("/v1/trips", json=payload)
         assert response.status_code == 422
 
@@ -103,26 +107,26 @@ class TestFlightNumberMode:
     def test_extra_time_minutes_valid_accepted(
         self, client: TestClient, extra: int
     ) -> None:
-        payload = {**FLIGHT_NUMBER_PAYLOAD, "extra_time_minutes": extra}
+        payload = {**FLIGHT_NUMBER_PAYLOAD, "preferences": {"extra_time_minutes": extra}}
         response = client.post("/v1/trips", json=payload)
         assert response.status_code == 201
-        assert response.json()["extra_time_minutes"] == extra
+        assert response.json()["preferences"]["extra_time_minutes"] == extra
 
     @pytest.mark.parametrize("mode", ["rideshare", "driving", "train", "bus", "other"])
     def test_transport_mode_accepted(self, client: TestClient, mode: str) -> None:
-        payload = {**FLIGHT_NUMBER_PAYLOAD, "transport_mode": mode}
+        payload = {**FLIGHT_NUMBER_PAYLOAD, "preferences": {"transport_mode": mode}}
         response = client.post("/v1/trips", json=payload)
         assert response.status_code == 201
-        assert response.json()["transport_mode"] == mode
+        assert response.json()["preferences"]["transport_mode"] == mode
 
     @pytest.mark.parametrize("profile", ["safety", "sweet", "risk"])
     def test_confidence_profile_accepted(
         self, client: TestClient, profile: str
     ) -> None:
-        payload = {**FLIGHT_NUMBER_PAYLOAD, "confidence_profile": profile}
+        payload = {**FLIGHT_NUMBER_PAYLOAD, "preferences": {"confidence_profile": profile}}
         response = client.post("/v1/trips", json=payload)
         assert response.status_code == 201
-        assert response.json()["confidence_profile"] == profile
+        assert response.json()["preferences"]["confidence_profile"] == profile
 
 
 class TestRouteSearchMode:
@@ -199,10 +203,13 @@ class TestRouteSearchMode:
         assert response.status_code == 422
 
     def test_route_search_preference_fields_returned(self, client: TestClient) -> None:
-        payload = {**ROUTE_SEARCH_PAYLOAD, "bag_count": 1, "extra_time_minutes": 30}
+        payload = {
+            **ROUTE_SEARCH_PAYLOAD,
+            "preferences": {"bag_count": 1, "extra_time_minutes": 30},
+        }
         body = client.post("/v1/trips", json=payload).json()
-        assert body["bag_count"] == 1
-        assert body["extra_time_minutes"] == 30
+        assert body["preferences"]["bag_count"] == 1
+        assert body["preferences"]["extra_time_minutes"] == 30
 
 
 class TestUnsupportedMode:

@@ -58,3 +58,7 @@ class RecommendationResponse(BaseModel):
     computed_at: datetime = Field(
         ..., description="Timestamp when recommendation was computed (UTC)"
     )
+    leave_home_in_past: bool = Field(
+        False,
+        description="True if the recommended departure time is in the past",
+    )

@@ -8,8 +8,10 @@ TRIP_PAYLOAD = {
 }
 
 
-def _create_trip(client: TestClient, **overrides: object) -> str:
-    payload = {**TRIP_PAYLOAD, **overrides}
+def _create_trip(client: TestClient, **pref_overrides: object) -> str:
+    payload = {**TRIP_PAYLOAD}
+    if pref_overrides:
+        payload["preferences"] = pref_overrides
     r = client.post("/v1/trips", json=payload)
     assert r.status_code == 201
     return r.json()["trip_id"]

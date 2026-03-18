@@ -1,5 +1,6 @@
 """Recommendation engine: lead time from preferences, flight snapshot, and integrations."""
 
+import math
 from datetime import datetime, timedelta, timezone
 
 from app.schemas.flight_snapshot import FlightSnapshot
@@ -14,12 +15,12 @@ from app.schemas.trips import (
     ConfidenceProfile,
     TransportMode,
     TripContext,
-    TripPreferences,
+    TripPreferenceOverrides,
 )
 from app.services.flight_snapshot_service import build_flight_snapshot
 from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.airport_graph import resolve_walking_times
-from app.services.integrations.google_maps import get_airport_destination, get_drive_time
+from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
 
@@ -39,7 +40,7 @@ GATE_BUFFER_MINUTES: dict[ConfidenceProfile, int] = {
 
 
 def _effective_context(
-    context: TripContext, overrides: TripPreferences | None
+    context: TripContext, overrides: TripPreferenceOverrides | None
 ) -> TripContext:
     """Apply preference_overrides onto a copy of context (only non-None overrides)."""
     if not overrides:
@@ -123,6 +124,12 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         walk_checkin_to_security = timings["checkin_to_security"]
         walk_security_to_gate = timings["security_to_gate"]
 
+        # Apply children walking multiplier on flat-default path
+        if prefs.traveling_with_children:
+            walk_dropoff_to_checkin = math.ceil(walk_dropoff_to_checkin * 1.4)
+            walk_checkin_to_security = math.ceil(walk_checkin_to_security * 1.4)
+            walk_security_to_gate = math.ceil(walk_security_to_gate * 1.4)
+
     # 2. At Airport — arrival waypoint
     bag_count = prefs.bag_count or 0
     has_boarding_pass = prefs.has_boarding_pass
@@ -193,7 +200,10 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
 
     # 4. TSA Security — ONLY the wait time, no walking included
-    departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
+    # Use local hour for TSA estimates; fall back to UTC hour if local not available
+    departure_hour = snapshot.departure_local_hour
+    if departure_hour is None:
+        departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
     dow = snapshot.scheduled_departure.weekday()  # 0=Monday
     tsa = estimate_tsa_wait(
         airport_iata=origin_iata,
@@ -291,6 +301,9 @@ def _build_response(
     boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
     leave_home_at = boarding_time - timedelta(minutes=final_total)
 
+    # Flag if leave_home_at is in the past
+    leave_home_in_past = leave_home_at < computed_at
+
     # Gate arrival = leave_home_at + segment durations (without comfort buffer or gate buffer)
     gate_segments_total = sum(
         s.duration_minutes for s in segments if s.id not in ("comfort_buffer", "gate_buffer")
@@ -313,6 +326,8 @@ def _build_response(
         explanation += " Walking times adjusted for children."
     if extra_time > 0:
         explanation += f" Includes +{extra_time} min extra time."
+    if leave_home_in_past:
+        explanation += " Warning: recommended departure time is in the past."
 
     return RecommendationResponse(
         trip_id=trip_id,
@@ -323,6 +338,7 @@ def _build_response(
         explanation=explanation.strip(),
         segments=segments,
         computed_at=computed_at,
+        leave_home_in_past=leave_home_in_past,
     )
 
 
