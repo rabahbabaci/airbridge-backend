@@ -19,7 +19,7 @@ from app.schemas.trips import (
 from app.services.flight_snapshot_service import build_flight_snapshot
 from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.google_maps import get_airport_destination, get_drive_time
-from app.services.integrations.tsa_estimator import estimate_tsa_wait
+from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
 
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
@@ -139,15 +139,25 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
 
     # 4. TSA Security — ONLY the wait time, no walking included
     departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
-    tsa = estimate_tsa_wait(origin_iata, departure_hour)
-    tsa_wait = tsa["estimated_minutes"]
-    tsa_period = tsa.get("period", "")
+    dow = snapshot.scheduled_departure.weekday()  # 0=Monday
+    tsa = estimate_tsa_wait(
+        airport_iata=origin_iata,
+        departure_hour=departure_hour,
+        day_of_week=dow,
+        security_access=prefs.security_access.value if hasattr(prefs, "security_access") else "none",
+    )
+    if prefs.confidence_profile == ConfidenceProfile.safety:
+        tsa_wait = tsa["p80"]
+    elif prefs.confidence_profile == ConfidenceProfile.risk:
+        tsa_wait = tsa["p25"]
+    else:
+        tsa_wait = tsa["p50"]
     segments.append(
         SegmentDetail(
             id="tsa",
             label=f"TSA Security ({origin_iata})" if origin_iata else "TSA Security",
             duration_minutes=tsa_wait,
-            advice=f"wait:{tsa_wait}|{tsa_period}",
+            advice=f"wait:{tsa_wait}|range:{tsa['p25']}-{tsa['p75']}|{prefs.security_access.value}",
         )
     )
 
