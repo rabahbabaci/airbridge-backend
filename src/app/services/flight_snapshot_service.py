@@ -136,6 +136,7 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
                         scheduled_departure=scheduled_departure,
                         scheduled_arrival=scheduled_arrival,
                         departure_terminal=flight.get("departure_terminal"),
+                        departure_gate=flight.get("departure_gate"),
                         origin_airport_code=origin_iata,
                         destination_airport_code=flight.get("destination_iata"),
                         airport_timings=_airport_timings_for(origin_iata),
