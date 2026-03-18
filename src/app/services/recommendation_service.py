@@ -267,23 +267,17 @@ def _build_response(
     segments = _compute_segments(context, snapshot)
     raw_total = sum(s.duration_minutes for s in segments)
 
-    # Additional buffers (no more flat multiplier — transport already reflects profile)
-    children_extra = 15 if prefs.traveling_with_children else 0
+    # Additional buffers
     extra_time = prefs.extra_time_minutes or 0
-    total_extra = children_extra + extra_time
+    total_extra = extra_time
 
-    if total_extra > 0:
-        advice_parts = []
-        if children_extra > 0:
-            advice_parts.append("traveling with children")
-        if extra_time > 0:
-            advice_parts.append(f"+{extra_time} min extra time")
+    if extra_time > 0:
         segments.append(
             SegmentDetail(
                 id="comfort_buffer",
                 label="Comfort buffer",
-                duration_minutes=total_extra,
-                advice=", ".join(advice_parts),
+                duration_minutes=extra_time,
+                advice=f"+{extra_time} min extra time",
             )
         )
 
@@ -312,7 +306,7 @@ def _build_response(
     else:
         explanation += "."
     if prefs.traveling_with_children:
-        explanation += " Includes +15 min for children."
+        explanation += " Walking times adjusted for children."
     if extra_time > 0:
         explanation += f" Includes +{extra_time} min extra time."
 
