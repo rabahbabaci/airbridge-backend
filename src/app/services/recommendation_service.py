@@ -31,6 +31,12 @@ CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
 
 RIDESHARE_PICKUP_WAIT_MINUTES = 5
 
+GATE_BUFFER_MINUTES: dict[ConfidenceProfile, int] = {
+    ConfidenceProfile.safety: 30,
+    ConfidenceProfile.sweet: 15,
+    ConfidenceProfile.risk: 0,
+}
+
 
 def _effective_context(
     context: TripContext, overrides: TripPreferences | None
@@ -195,6 +201,18 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
+    # 6. Gate buffer — time at gate before boarding starts
+    gate_buffer = GATE_BUFFER_MINUTES.get(prefs.confidence_profile, 15)
+    if gate_buffer > 0:
+        segments.append(
+            SegmentDetail(
+                id="gate_buffer",
+                label="Time at gate",
+                duration_minutes=gate_buffer,
+                advice="Settle in before boarding",
+            )
+        )
+
     return segments
 
 
@@ -242,9 +260,9 @@ def _build_response(
     boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
     leave_home_at = boarding_time - timedelta(minutes=final_total)
 
-    # Gate arrival = leave_home_at + segment durations (without comfort buffer)
+    # Gate arrival = leave_home_at + segment durations (without comfort buffer or gate buffer)
     gate_segments_total = sum(
-        s.duration_minutes for s in segments if s.id != "comfort_buffer"
+        s.duration_minutes for s in segments if s.id not in ("comfort_buffer", "gate_buffer")
     )
     gate_arrival_at = leave_home_at + timedelta(minutes=gate_segments_total)
 
