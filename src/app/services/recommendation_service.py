@@ -119,6 +119,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
 
     # 2. At Airport — arrival waypoint
     bag_count = prefs.bag_count or 0
+    has_boarding_pass = prefs.has_boarding_pass
     terminal_info = f"T{snapshot.departure_terminal}" if snapshot.departure_terminal else ""
     gate_info = f" Gate {snapshot.departure_gate}" if snapshot.departure_gate else ""
     at_airport_detail = f"{terminal_info}{gate_info}".strip() if using_graph else ""
@@ -133,8 +134,18 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
                 advice=f"walk_to_next:{walk_dropoff_to_checkin}|{at_airport_detail}".rstrip("|"),
             )
         )
+    elif not has_boarding_pass:
+        # No bags but need boarding pass: walk to check-in counter
+        segments.append(
+            SegmentDetail(
+                id="at_airport",
+                label="At Airport",
+                duration_minutes=walk_dropoff_to_checkin,
+                advice=f"walk_to_next:{walk_dropoff_to_checkin}|{at_airport_detail}".rstrip("|"),
+            )
+        )
     else:
-        # No bags: walk from drop-off straight to TSA
+        # Has boarding pass, no bags: walk from drop-off straight to TSA
         walk_to_tsa = walk_dropoff_to_checkin + walk_checkin_to_security
         segments.append(
             SegmentDetail(
@@ -145,16 +156,33 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
             )
         )
 
-    # 3. Bag drop (only if bags)
+    # 3. Check-in / Bag drop
     if bag_count > 0:
-        bag_drop_time = 5 + (bag_count - 1) * 3
+        if has_boarding_pass:
+            bag_drop_time = 5 + (bag_count - 1) * 3
+            bag_advice = f"{bag_count} bag(s)|drop:{bag_drop_time}|walk_to_next:{walk_checkin_to_security}"
+        else:
+            bag_drop_time = 8 + (bag_count - 1) * 3
+            bag_advice = f"Get boarding pass + drop {bag_count} bag(s)|counter:{bag_drop_time}|walk_to_next:{walk_checkin_to_security}"
         bag_total = bag_drop_time + walk_checkin_to_security
         segments.append(
             SegmentDetail(
                 id="bag_drop",
                 label="Bag Drop",
                 duration_minutes=bag_total,
-                advice=f"{bag_count} bag(s)|drop:{bag_drop_time}|walk_to_next:{walk_checkin_to_security}",
+                advice=bag_advice,
+            )
+        )
+    elif not has_boarding_pass:
+        # No bags, no boarding pass: stop at counter then walk to TSA
+        counter_time = 5
+        checkin_total = counter_time + walk_checkin_to_security
+        segments.append(
+            SegmentDetail(
+                id="checkin",
+                label="Check-in",
+                duration_minutes=checkin_total,
+                advice=f"Get boarding pass at counter|counter:{counter_time}|walk_to_next:{walk_checkin_to_security}",
             )
         )
 
