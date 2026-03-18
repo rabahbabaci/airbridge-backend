@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import time
@@ -45,6 +46,67 @@ def _travel_label(transport_mode: str, airport_iata: str) -> str:
     return labels.get(transport_mode, f"Travel to {airport_iata}")
 
 
+async def _fetch_distance_matrix(
+    client: httpx.AsyncClient,
+    origin: str,
+    destination: str,
+    departure_time: int,
+    traffic_model: str,
+) -> int | None:
+    """Fetch duration_in_traffic from Google Distance Matrix API. Returns minutes or None."""
+    try:
+        params = {
+            "origins": origin,
+            "destinations": destination,
+            "key": settings.google_maps_api_key,
+            "mode": "driving",
+            "departure_time": str(departure_time),
+            "traffic_model": traffic_model,
+        }
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/distancematrix/json",
+            params=params,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data.get("rows") or []
+        if not rows:
+            return None
+        elements = rows[0].get("elements") or []
+        if not elements or elements[0].get("status") != "OK":
+            return None
+        dur = elements[0].get("duration_in_traffic") or elements[0].get("duration")
+        if not dur:
+            return None
+        return math.ceil(dur.get("value", 0) / 60)
+    except Exception:
+        return None
+
+
+def _fetch_traffic_variants(
+    origin: str, destination: str, departure_time: int, primary_minutes: int
+) -> tuple[int, int]:
+    """Return (pessimistic, optimistic) duration in minutes via parallel Distance Matrix calls."""
+    async def _run() -> tuple[int | None, int | None]:
+        async with httpx.AsyncClient() as client:
+            return await asyncio.gather(
+                _fetch_distance_matrix(client, origin, destination, departure_time, "pessimistic"),
+                _fetch_distance_matrix(client, origin, destination, departure_time, "optimistic"),
+            )
+
+    try:
+        pessimistic_min, optimistic_min = asyncio.run(_run())
+    except Exception:
+        pessimistic_min, optimistic_min = None, None
+
+    if pessimistic_min is None:
+        pessimistic_min = math.ceil(primary_minutes * 1.3)
+    if optimistic_min is None:
+        optimistic_min = math.ceil(primary_minutes * 0.85)
+
+    return pessimistic_min, optimistic_min
+
+
 def get_drive_time(
     origin_address: str,
     airport_iata: str,
@@ -88,6 +150,8 @@ def get_drive_time(
             logger.warning("Google Directions returned no routes for %s -> %s", origin_address, airport_iata)
             return {
                 "duration_minutes": 45,
+                "duration_pessimistic": 45,
+                "duration_optimistic": 45,
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
@@ -99,6 +163,8 @@ def get_drive_time(
             logger.warning("Google Directions returned no legs for %s -> %s", origin_address, airport_iata)
             return {
                 "duration_minutes": 45,
+                "duration_pessimistic": 45,
+                "duration_optimistic": 45,
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
@@ -110,6 +176,8 @@ def get_drive_time(
             logger.warning("Google Directions leg has no duration for %s -> %s", origin_address, airport_iata)
             return {
                 "duration_minutes": 45,
+                "duration_pessimistic": 45,
+                "duration_optimistic": 45,
                 "duration_text": "~45 mins (estimate)",
                 "distance_text": "unknown",
                 "source": "fallback",
@@ -121,8 +189,27 @@ def get_drive_time(
         duration_text = duration_info.get("text", "~45 mins (estimate)")
         distance_text = (leg.get("distance") or {}).get("text", "unknown")
 
+        # Compute pessimistic/optimistic traffic variants
+        is_driving = params.get("mode") == "driving"
+        has_departure = departure_time is not None and departure_time > int(time.time())
+
+        if has_departure and is_driving:
+            dur_pessimistic, dur_optimistic = _fetch_traffic_variants(
+                origin_address, destination, departure_time, duration_minutes
+            )
+        elif has_departure and not is_driving:
+            # Transit: no traffic_model support
+            dur_pessimistic = duration_minutes + 10
+            dur_optimistic = duration_minutes
+        else:
+            # No departure_time — no traffic data available
+            dur_pessimistic = duration_minutes
+            dur_optimistic = duration_minutes
+
         return {
             "duration_minutes": duration_minutes,
+            "duration_pessimistic": dur_pessimistic,
+            "duration_optimistic": dur_optimistic,
             "duration_text": duration_text,
             "distance_text": distance_text,
             "source": "google_maps",
@@ -137,6 +224,8 @@ def get_drive_time(
         )
         return {
             "duration_minutes": 45,
+            "duration_pessimistic": 45,
+            "duration_optimistic": 45,
             "duration_text": "~45 mins (estimate)",
             "distance_text": "unknown",
             "source": "fallback",
