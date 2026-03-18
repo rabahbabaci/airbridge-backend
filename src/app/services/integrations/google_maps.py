@@ -1,5 +1,6 @@
 import logging
 import math
+import time
 
 import httpx
 
@@ -49,6 +50,7 @@ def get_drive_time(
     airport_iata: str,
     airport_name: str | None = None,
     transport_mode: str = "rideshare",
+    departure_time: int | None = None,
 ) -> dict:
     """Get duration and distance from origin to airport via Google Directions API."""
     try:
@@ -70,6 +72,9 @@ def get_drive_time(
         else:
             # rideshare, driving, other
             params["mode"] = "driving"
+
+        if departure_time is not None and departure_time > int(time.time()):
+            params["departure_time"] = str(departure_time)
 
         with httpx.Client() as client:
             response = client.get(url, params=params)

@@ -65,10 +65,13 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     segments: list[SegmentDetail] = []
 
     # 1. Transport to airport (travel time)
+    approx_leave = snapshot.scheduled_departure - timedelta(hours=3)
+    departure_ts = int(approx_leave.timestamp())
     drive_data = get_drive_time(
         context.home_address,
         origin_iata,
         transport_mode=prefs.transport_mode.value,
+        departure_time=departure_ts,
     )
     drive_minutes = drive_data["duration_minutes"]
     if prefs.transport_mode == TransportMode.rideshare:
