@@ -113,10 +113,15 @@ def get_drive_time(
     airport_name: str | None = None,
     transport_mode: str = "rideshare",
     departure_time: int | None = None,
+    terminal: str | None = None,
 ) -> dict:
     """Get duration and distance from origin to airport via Google Directions API."""
     try:
-        destination = airport_name or get_airport_destination(airport_iata)
+        if terminal and (airport_iata or "").upper() in AIRPORT_DESTINATIONS:
+            base_name = AIRPORT_DESTINATIONS[(airport_iata or "").upper()]
+            destination = f"{base_name} Terminal {terminal} departures"
+        else:
+            destination = airport_name or get_airport_destination(airport_iata)
         url = "https://maps.googleapis.com/maps/api/directions/json"
         mode = "driving"
         params: dict[str, str] = {

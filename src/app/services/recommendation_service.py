@@ -66,6 +66,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         origin_iata,
         transport_mode=prefs.transport_mode.value,
         departure_time=departure_ts,
+        terminal=snapshot.departure_terminal,
     )
     if prefs.confidence_profile == ConfidenceProfile.safety:
         drive_minutes = drive_data["duration_pessimistic"]
