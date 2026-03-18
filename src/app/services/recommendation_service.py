@@ -18,6 +18,7 @@ from app.schemas.trips import (
 )
 from app.services.flight_snapshot_service import build_flight_snapshot
 from app.services.integrations.airport_defaults import get_airport_timings
+from app.services.integrations.airport_graph import resolve_walking_times
 from app.services.integrations.google_maps import get_airport_destination, get_drive_time
 from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
@@ -85,46 +86,60 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # Determine walking times based on transport mode
-    if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
-        walk_dropoff_to_checkin = timings["transit_to_terminal"]  # station to check-in area
-    elif prefs.transport_mode == TransportMode.driving:
-        walk_dropoff_to_checkin = timings["parking_to_terminal"]  # parking to check-in area
-    else:
-        # rideshare, other — dropped at curb
-        walk_dropoff_to_checkin = timings["curb_to_checkin"]  # curb to check-in area
+    # Resolve walking times: try graph first, fall back to flat defaults
+    graph_times = resolve_walking_times(
+        airport_iata=origin_iata,
+        transport_mode=prefs.transport_mode.value,
+        terminal=snapshot.departure_terminal,
+        gate=snapshot.departure_gate,
+        with_children=prefs.traveling_with_children,
+    )
+    using_graph = graph_times is not None
 
-    walk_checkin_to_security = timings["checkin_to_security"]  # check-in area to TSA checkpoint
+    if using_graph:
+        walk_dropoff_to_checkin = graph_times["entry_to_checkin"]
+        walk_checkin_to_security = graph_times["checkin_to_tsa"]
+        walk_security_to_gate = graph_times["tsa_to_gate"]
+    else:
+        # Flat defaults from airport_defaults.py
+        if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
+            walk_dropoff_to_checkin = timings["transit_to_terminal"]
+        elif prefs.transport_mode == TransportMode.driving:
+            walk_dropoff_to_checkin = timings["parking_to_terminal"]
+        else:
+            walk_dropoff_to_checkin = timings["curb_to_checkin"]
+        walk_checkin_to_security = timings["checkin_to_security"]
+        walk_security_to_gate = timings["security_to_gate"]
 
     # 2. At Airport — arrival waypoint
-    # Duration = the walk FROM here to the next step
     bag_count = prefs.bag_count or 0
+    terminal_info = f"T{snapshot.departure_terminal}" if snapshot.departure_terminal else ""
+    gate_info = f" Gate {snapshot.departure_gate}" if snapshot.departure_gate else ""
+    at_airport_detail = f"{terminal_info}{gate_info}".strip() if using_graph else ""
+
     if bag_count > 0:
-        # With bags: user walks from drop-off to check-in counter, then drops bags
-        # Duration = walk from drop-off to check-in area
+        # With bags: walk from drop-off to check-in counter
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
                 duration_minutes=walk_dropoff_to_checkin,
-                advice=f"walk_to_next:{walk_dropoff_to_checkin}",
+                advice=f"walk_to_next:{walk_dropoff_to_checkin}|{at_airport_detail}".rstrip("|"),
             )
         )
     else:
-        # No bags: user walks from drop-off straight to TSA
-        # Duration = walk from drop-off to check-in area + check-in area to TSA
+        # No bags: walk from drop-off straight to TSA
         walk_to_tsa = walk_dropoff_to_checkin + walk_checkin_to_security
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
                 duration_minutes=walk_to_tsa,
-                advice=f"walk_to_next:{walk_to_tsa}",
+                advice=f"walk_to_next:{walk_to_tsa}|{at_airport_detail}".rstrip("|"),
             )
         )
 
     # 3. Bag drop (only if bags)
-    # Duration includes: time to drop bags + walk from bag drop to TSA checkpoint
     if bag_count > 0:
         bag_drop_time = 5 + (bag_count - 1) * 3
         bag_total = bag_drop_time + walk_checkin_to_security
@@ -162,8 +177,15 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     )
 
     # 5. Gate (walk from security to gate)
-    gate_walk = timings["security_to_gate"]
-    gate_advice = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at gate"
+    gate_walk = walk_security_to_gate
+    if snapshot.departure_gate:
+        gate_advice = f"Gate {snapshot.departure_gate}"
+        if snapshot.departure_terminal:
+            gate_advice += f" (Terminal {snapshot.departure_terminal})"
+    elif snapshot.departure_terminal:
+        gate_advice = f"Terminal {snapshot.departure_terminal}"
+    else:
+        gate_advice = "Arrive at gate"
     segments.append(
         SegmentDetail(
             id="walk_to_gate",
