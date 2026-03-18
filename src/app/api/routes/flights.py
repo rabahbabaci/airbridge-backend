@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.services.flight_snapshot_service import get_available_flights
 from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.airport_defaults import get_airport_timings
-from app.services.integrations.tsa_estimator import estimate_tsa_wait
+from app.services.integrations.tsa_model import estimate_tsa_wait
 
 router = APIRouter(prefix="/flights", tags=["flights"])
 
@@ -37,7 +37,7 @@ def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: i
         drive_min
         + timings["curb_to_checkin"]
         + timings["checkin_to_security"]
-        + tsa["estimated_minutes"]
+        + tsa["p50"]
         + timings["security_to_gate"]
     )
     cache[origin_iata] = total

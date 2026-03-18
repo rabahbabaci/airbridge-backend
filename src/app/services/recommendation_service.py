@@ -18,15 +18,10 @@ from app.schemas.trips import (
 )
 from app.services.flight_snapshot_service import build_flight_snapshot
 from app.services.integrations.airport_defaults import get_airport_timings
+from app.services.integrations.airport_graph import resolve_walking_times
 from app.services.integrations.google_maps import get_airport_destination, get_drive_time
-from app.services.integrations.tsa_estimator import estimate_tsa_wait
+from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
-
-CONFIDENCE_MULTIPLIERS: dict[ConfidenceProfile, float] = {
-    ConfidenceProfile.safety: 1.35,
-    ConfidenceProfile.sweet: 1.15,
-    ConfidenceProfile.risk: 1.0,
-}
 
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
     ConfidenceProfile.safety: 0.92,
@@ -65,12 +60,21 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     segments: list[SegmentDetail] = []
 
     # 1. Transport to airport (travel time)
+    approx_leave = snapshot.scheduled_departure - timedelta(hours=3)
+    departure_ts = int(approx_leave.timestamp())
     drive_data = get_drive_time(
         context.home_address,
         origin_iata,
         transport_mode=prefs.transport_mode.value,
+        departure_time=departure_ts,
+        terminal=snapshot.departure_terminal,
     )
-    drive_minutes = drive_data["duration_minutes"]
+    if prefs.confidence_profile == ConfidenceProfile.safety:
+        drive_minutes = drive_data["duration_pessimistic"]
+    elif prefs.confidence_profile == ConfidenceProfile.risk:
+        drive_minutes = drive_data["duration_optimistic"]
+    else:
+        drive_minutes = drive_data["duration_minutes"]
     if prefs.transport_mode == TransportMode.rideshare:
         drive_minutes += RIDESHARE_PICKUP_WAIT_MINUTES
     segments.append(
@@ -82,46 +86,60 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         )
     )
 
-    # Determine walking times based on transport mode
-    if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
-        walk_dropoff_to_checkin = timings["transit_to_terminal"]  # station to check-in area
-    elif prefs.transport_mode == TransportMode.driving:
-        walk_dropoff_to_checkin = timings["parking_to_terminal"]  # parking to check-in area
-    else:
-        # rideshare, other — dropped at curb
-        walk_dropoff_to_checkin = timings["curb_to_checkin"]  # curb to check-in area
+    # Resolve walking times: try graph first, fall back to flat defaults
+    graph_times = resolve_walking_times(
+        airport_iata=origin_iata,
+        transport_mode=prefs.transport_mode.value,
+        terminal=snapshot.departure_terminal,
+        gate=snapshot.departure_gate,
+        with_children=prefs.traveling_with_children,
+    )
+    using_graph = graph_times is not None
 
-    walk_checkin_to_security = timings["checkin_to_security"]  # check-in area to TSA checkpoint
+    if using_graph:
+        walk_dropoff_to_checkin = graph_times["entry_to_checkin"]
+        walk_checkin_to_security = graph_times["checkin_to_tsa"]
+        walk_security_to_gate = graph_times["tsa_to_gate"]
+    else:
+        # Flat defaults from airport_defaults.py
+        if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
+            walk_dropoff_to_checkin = timings["transit_to_terminal"]
+        elif prefs.transport_mode == TransportMode.driving:
+            walk_dropoff_to_checkin = timings["parking_to_terminal"]
+        else:
+            walk_dropoff_to_checkin = timings["curb_to_checkin"]
+        walk_checkin_to_security = timings["checkin_to_security"]
+        walk_security_to_gate = timings["security_to_gate"]
 
     # 2. At Airport — arrival waypoint
-    # Duration = the walk FROM here to the next step
     bag_count = prefs.bag_count or 0
+    terminal_info = f"T{snapshot.departure_terminal}" if snapshot.departure_terminal else ""
+    gate_info = f" Gate {snapshot.departure_gate}" if snapshot.departure_gate else ""
+    at_airport_detail = f"{terminal_info}{gate_info}".strip() if using_graph else ""
+
     if bag_count > 0:
-        # With bags: user walks from drop-off to check-in counter, then drops bags
-        # Duration = walk from drop-off to check-in area
+        # With bags: walk from drop-off to check-in counter
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
                 duration_minutes=walk_dropoff_to_checkin,
-                advice=f"walk_to_next:{walk_dropoff_to_checkin}",
+                advice=f"walk_to_next:{walk_dropoff_to_checkin}|{at_airport_detail}".rstrip("|"),
             )
         )
     else:
-        # No bags: user walks from drop-off straight to TSA
-        # Duration = walk from drop-off to check-in area + check-in area to TSA
+        # No bags: walk from drop-off straight to TSA
         walk_to_tsa = walk_dropoff_to_checkin + walk_checkin_to_security
         segments.append(
             SegmentDetail(
                 id="at_airport",
                 label="At Airport",
                 duration_minutes=walk_to_tsa,
-                advice=f"walk_to_next:{walk_to_tsa}",
+                advice=f"walk_to_next:{walk_to_tsa}|{at_airport_detail}".rstrip("|"),
             )
         )
 
     # 3. Bag drop (only if bags)
-    # Duration includes: time to drop bags + walk from bag drop to TSA checkpoint
     if bag_count > 0:
         bag_drop_time = 5 + (bag_count - 1) * 3
         bag_total = bag_drop_time + walk_checkin_to_security
@@ -136,21 +154,38 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
 
     # 4. TSA Security — ONLY the wait time, no walking included
     departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
-    tsa = estimate_tsa_wait(origin_iata, departure_hour)
-    tsa_wait = tsa["estimated_minutes"]
-    tsa_period = tsa.get("period", "")
+    dow = snapshot.scheduled_departure.weekday()  # 0=Monday
+    tsa = estimate_tsa_wait(
+        airport_iata=origin_iata,
+        departure_hour=departure_hour,
+        day_of_week=dow,
+        security_access=prefs.security_access.value if hasattr(prefs, "security_access") else "none",
+    )
+    if prefs.confidence_profile == ConfidenceProfile.safety:
+        tsa_wait = tsa["p80"]
+    elif prefs.confidence_profile == ConfidenceProfile.risk:
+        tsa_wait = tsa["p25"]
+    else:
+        tsa_wait = tsa["p50"]
     segments.append(
         SegmentDetail(
             id="tsa",
             label=f"TSA Security ({origin_iata})" if origin_iata else "TSA Security",
             duration_minutes=tsa_wait,
-            advice=f"wait:{tsa_wait}|{tsa_period}",
+            advice=f"wait:{tsa_wait}|range:{tsa['p25']}-{tsa['p75']}|{prefs.security_access.value}",
         )
     )
 
     # 5. Gate (walk from security to gate)
-    gate_walk = timings["security_to_gate"]
-    gate_advice = f"Terminal {snapshot.departure_terminal}" if snapshot.departure_terminal else "Arrive at gate"
+    gate_walk = walk_security_to_gate
+    if snapshot.departure_gate:
+        gate_advice = f"Gate {snapshot.departure_gate}"
+        if snapshot.departure_terminal:
+            gate_advice += f" (Terminal {snapshot.departure_terminal})"
+    elif snapshot.departure_terminal:
+        gate_advice = f"Terminal {snapshot.departure_terminal}"
+    else:
+        gate_advice = "Arrive at gate"
     segments.append(
         SegmentDetail(
             id="walk_to_gate",
@@ -181,24 +216,13 @@ def _build_response(
     segments = _compute_segments(context, snapshot)
     raw_total = sum(s.duration_minutes for s in segments)
 
-    # Apply confidence multiplier to get adjusted total
-    multiplier = CONFIDENCE_MULTIPLIERS.get(prefs.confidence_profile, 1.0)
-    adjusted_total = int(round(raw_total * multiplier))
-    multiplier_extra = adjusted_total - raw_total
-
-    # Additional buffers
+    # Additional buffers (no more flat multiplier — transport already reflects profile)
     children_extra = 15 if prefs.traveling_with_children else 0
     extra_time = prefs.extra_time_minutes or 0
-
-    # Total extra minutes from all sources
-    total_extra = multiplier_extra + children_extra + extra_time
+    total_extra = children_extra + extra_time
 
     if total_extra > 0:
-        # Safety profile or extras — add comfort buffer segment
         advice_parts = []
-        if multiplier_extra > 0:
-            profile_name = prefs.confidence_profile.value.replace("_", " ").title()
-            advice_parts.append(f"{profile_name} profile buffer")
         if children_extra > 0:
             advice_parts.append("traveling with children")
         if extra_time > 0:
@@ -212,21 +236,13 @@ def _build_response(
             )
         )
 
-    # Calculate final total:
-    # - If total_extra > 0: raw + buffer (segments already includes comfort_buffer)
-    # - If total_extra == 0: just raw (Just Right, no extras)
-    # - If total_extra < 0: raw reduced by the cut (Cut It Close saves time)
-    if total_extra >= 0:
-        final_total = sum(s.duration_minutes for s in segments)
-    else:
-        # Cut It Close: reduce journey time but don't go below 50% of raw
-        final_total = max(raw_total + total_extra, int(raw_total * 0.5))
+    final_total = sum(s.duration_minutes for s in segments)
 
     # Boarding starts 30 min before departure
     boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
     leave_home_at = boarding_time - timedelta(minutes=final_total)
 
-    # Gate arrival = leave_home_at + raw segment durations (without comfort buffer)
+    # Gate arrival = leave_home_at + segment durations (without comfort buffer)
     gate_segments_total = sum(
         s.duration_minutes for s in segments if s.id != "comfort_buffer"
     )
@@ -235,10 +251,15 @@ def _build_response(
     confidence_score = CONFIDENCE_SCORES.get(prefs.confidence_profile, 0.85)
 
     transport_label = segments[0].label if segments else "Drive to airport"
+    profile_name = prefs.confidence_profile.value.replace("_", " ").title()
     explanation = (
-        f"{transport_label}, {prefs.confidence_profile.value.replace('_', ' ').title()} profile. "
-        f"Raw journey: {raw_total} min, with {total_extra} min buffer."
+        f"{transport_label}, {profile_name} profile. "
+        f"Journey: {raw_total} min"
     )
+    if total_extra > 0:
+        explanation += f", with {total_extra} min buffer."
+    else:
+        explanation += "."
     if prefs.traveling_with_children:
         explanation += " Includes +15 min for children."
     if extra_time > 0:

@@ -44,6 +44,9 @@ class FlightSnapshot(BaseModel):
     departure_terminal: str | None = Field(
         None, description="Departure terminal if known"
     )
+    departure_gate: str | None = Field(
+        None, description="Departure gate if known"
+    )
     origin_airport_code: str | None = Field(None, description="Origin IATA code")
     destination_airport_code: str | None = Field(
         None, description="Destination IATA code"
