@@ -22,12 +22,6 @@ from app.services.integrations.google_maps import get_airport_destination, get_d
 from app.services.integrations.tsa_estimator import estimate_tsa_wait
 from app.services.trip_intake import get_trip_context
 
-CONFIDENCE_MULTIPLIERS: dict[ConfidenceProfile, float] = {
-    ConfidenceProfile.safety: 1.35,
-    ConfidenceProfile.sweet: 1.15,
-    ConfidenceProfile.risk: 1.0,
-}
-
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
     ConfidenceProfile.safety: 0.92,
     ConfidenceProfile.sweet: 0.85,
@@ -73,7 +67,12 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         transport_mode=prefs.transport_mode.value,
         departure_time=departure_ts,
     )
-    drive_minutes = drive_data["duration_minutes"]
+    if prefs.confidence_profile == ConfidenceProfile.safety:
+        drive_minutes = drive_data["duration_pessimistic"]
+    elif prefs.confidence_profile == ConfidenceProfile.risk:
+        drive_minutes = drive_data["duration_optimistic"]
+    else:
+        drive_minutes = drive_data["duration_minutes"]
     if prefs.transport_mode == TransportMode.rideshare:
         drive_minutes += RIDESHARE_PICKUP_WAIT_MINUTES
     segments.append(
@@ -184,24 +183,13 @@ def _build_response(
     segments = _compute_segments(context, snapshot)
     raw_total = sum(s.duration_minutes for s in segments)
 
-    # Apply confidence multiplier to get adjusted total
-    multiplier = CONFIDENCE_MULTIPLIERS.get(prefs.confidence_profile, 1.0)
-    adjusted_total = int(round(raw_total * multiplier))
-    multiplier_extra = adjusted_total - raw_total
-
-    # Additional buffers
+    # Additional buffers (no more flat multiplier — transport already reflects profile)
     children_extra = 15 if prefs.traveling_with_children else 0
     extra_time = prefs.extra_time_minutes or 0
-
-    # Total extra minutes from all sources
-    total_extra = multiplier_extra + children_extra + extra_time
+    total_extra = children_extra + extra_time
 
     if total_extra > 0:
-        # Safety profile or extras — add comfort buffer segment
         advice_parts = []
-        if multiplier_extra > 0:
-            profile_name = prefs.confidence_profile.value.replace("_", " ").title()
-            advice_parts.append(f"{profile_name} profile buffer")
         if children_extra > 0:
             advice_parts.append("traveling with children")
         if extra_time > 0:
@@ -215,21 +203,13 @@ def _build_response(
             )
         )
 
-    # Calculate final total:
-    # - If total_extra > 0: raw + buffer (segments already includes comfort_buffer)
-    # - If total_extra == 0: just raw (Just Right, no extras)
-    # - If total_extra < 0: raw reduced by the cut (Cut It Close saves time)
-    if total_extra >= 0:
-        final_total = sum(s.duration_minutes for s in segments)
-    else:
-        # Cut It Close: reduce journey time but don't go below 50% of raw
-        final_total = max(raw_total + total_extra, int(raw_total * 0.5))
+    final_total = sum(s.duration_minutes for s in segments)
 
     # Boarding starts 30 min before departure
     boarding_time = snapshot.scheduled_departure - timedelta(minutes=30)
     leave_home_at = boarding_time - timedelta(minutes=final_total)
 
-    # Gate arrival = leave_home_at + raw segment durations (without comfort buffer)
+    # Gate arrival = leave_home_at + segment durations (without comfort buffer)
     gate_segments_total = sum(
         s.duration_minutes for s in segments if s.id != "comfort_buffer"
     )
@@ -238,10 +218,15 @@ def _build_response(
     confidence_score = CONFIDENCE_SCORES.get(prefs.confidence_profile, 0.85)
 
     transport_label = segments[0].label if segments else "Drive to airport"
+    profile_name = prefs.confidence_profile.value.replace("_", " ").title()
     explanation = (
-        f"{transport_label}, {prefs.confidence_profile.value.replace('_', ' ').title()} profile. "
-        f"Raw journey: {raw_total} min, with {total_extra} min buffer."
+        f"{transport_label}, {profile_name} profile. "
+        f"Journey: {raw_total} min"
     )
+    if total_extra > 0:
+        explanation += f", with {total_extra} min buffer."
+    else:
+        explanation += "."
     if prefs.traveling_with_children:
         explanation += " Includes +15 min for children."
     if extra_time > 0:
