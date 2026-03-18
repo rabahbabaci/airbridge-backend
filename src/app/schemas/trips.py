@@ -67,8 +67,8 @@ class TripPreferenceOverrides(BaseModel):
     @field_validator("gate_time_minutes")
     @classmethod
     def gate_time_range(cls, v: int | None) -> int | None:
-        if v is not None and (v < 0 or v > 120):
-            raise ValueError("gate_time_minutes must be between 0 and 120")
+        if v is not None and (v < 0 or v > 180):
+            raise ValueError("gate_time_minutes must be between 0 and 180")
         return v
 
 
@@ -85,8 +85,8 @@ class TripPreferences(BaseModel):
     @field_validator("gate_time_minutes")
     @classmethod
     def gate_time_range(cls, v: int | None) -> int | None:
-        if v is not None and (v < 0 or v > 120):
-            raise ValueError("gate_time_minutes must be between 0 and 120")
+        if v is not None and (v < 0 or v > 180):
+            raise ValueError("gate_time_minutes must be between 0 and 180")
         return v
 
     @field_validator("bag_count", mode="before")
