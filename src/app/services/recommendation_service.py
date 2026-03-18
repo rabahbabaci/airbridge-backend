@@ -57,6 +57,10 @@ def _effective_context(
         prefs_updates["extra_time_minutes"] = overrides.extra_time_minutes
     if overrides.gate_time_minutes is not None:
         prefs_updates["gate_time_minutes"] = overrides.gate_time_minutes
+    if overrides.security_access is not None:
+        prefs_updates["security_access"] = overrides.security_access
+    if overrides.has_boarding_pass is not None:
+        prefs_updates["has_boarding_pass"] = overrides.has_boarding_pass
     new_prefs = context.preferences.model_copy(update=prefs_updates)
     return context.model_copy(update={"preferences": new_prefs})
 
