@@ -47,8 +47,8 @@ class TripPreferenceOverrides(BaseModel):
     @field_validator("bag_count")
     @classmethod
     def bag_count_range(cls, v: int | None) -> int | None:
-        if v is not None and (v < 0 or v > 3):
-            raise ValueError("bag_count must be between 0 and 3")
+        if v is not None and (v < 0 or v > 10):
+            raise ValueError("bag_count must be between 0 and 10")
         return v
 
     @field_validator("extra_time_minutes")
@@ -75,7 +75,7 @@ class TripPreferenceOverrides(BaseModel):
 class TripPreferences(BaseModel):
     transport_mode: TransportMode = TransportMode.driving
     confidence_profile: ConfidenceProfile = ConfidenceProfile.sweet
-    bag_count: int = Field(0, ge=0, le=3)
+    bag_count: int = Field(0, ge=0, le=10)
     traveling_with_children: bool = False
     extra_time_minutes: ExtraTimeMinutes = 0
     has_boarding_pass: bool = True
@@ -96,8 +96,8 @@ class TripPreferences(BaseModel):
             return 0
         if isinstance(v, str) and v.strip().isdigit():
             v = int(v.strip())
-        if isinstance(v, int) and (v < 0 or v > 3):
-            raise ValueError("bag_count must be between 0 and 3")
+        if isinstance(v, int) and (v < 0 or v > 10):
+            raise ValueError("bag_count must be between 0 and 10")
         if not isinstance(v, int):
             raise ValueError("bag_count must be an integer")
         return v
