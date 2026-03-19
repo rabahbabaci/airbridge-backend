@@ -29,9 +29,14 @@ def parse_flight(raw: dict) -> dict:
     # Revised times for delays
     revised_dep_utc = revised_dep.get("utc")
     revised_dep_local = revised_dep.get("local")
-    is_delayed = bool(revised_dep_utc)
+    is_delayed = bool(revised_dep_utc and dep_utc and revised_dep_utc > dep_utc)
 
     status = raw.get("status", "Unknown")
+
+    # Normalize local times to "YYYY-MM-DD HH:MM" (replace T, truncate to 16 chars)
+    dep_local = dep_local.replace("T", " ")[:16] if dep_local else None
+    arr_local = arr_local.replace("T", " ")[:16] if arr_local else None
+    revised_dep_local = revised_dep_local.replace("T", " ")[:16] if revised_dep_local else None
 
     return {
         "flight_number": raw.get("number"),
