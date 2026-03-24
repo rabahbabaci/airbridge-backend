@@ -11,6 +11,10 @@ class Settings:
     app_port: int = int(os.getenv("APP_PORT", "8000"))
     rapidapi_key: str = os.getenv("RAPIDAPI_KEY", "")
     google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    database_url: str = os.getenv("DATABASE_URL", "")
+    supabase_url: str = os.getenv("SUPABASE_URL", "")
+    supabase_key: str = os.getenv("SUPABASE_KEY", "")
+    jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
 
 
 settings = Settings()
