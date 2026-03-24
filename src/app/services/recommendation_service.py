@@ -360,14 +360,14 @@ def _build_response(
     )
 
 
-def compute_recommendation(
+async def compute_recommendation(
     payload: RecommendationRequest,
 ) -> RecommendationResponse | None:
     """
     Compute leave-home recommendation for the given trip.
     Returns None if trip_id is not found (caller should return 404).
     """
-    context = get_trip_context(payload.trip_id)
+    context = await get_trip_context(payload.trip_id)
     if context is None:
         return None
     snapshot = build_flight_snapshot(context)
@@ -375,14 +375,14 @@ def compute_recommendation(
     return _build_response(str(context.trip_id), context, snapshot, now)
 
 
-def recompute_recommendation(
+async def recompute_recommendation(
     payload: RecommendationRecomputeRequest,
 ) -> RecommendationResponse | None:
     """
     Recompute recommendation; uses preference_overrides when provided.
     Returns None if trip_id is not found.
     """
-    context = get_trip_context(payload.trip_id)
+    context = await get_trip_context(payload.trip_id)
     if context is None:
         return None
     context = _effective_context(context, payload.preference_overrides)

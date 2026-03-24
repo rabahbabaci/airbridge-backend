@@ -13,13 +13,13 @@ router = APIRouter(prefix="/trips", tags=["trips"])
 
 
 @router.post("", response_model=TripContext, status_code=201)
-def post_trip(payload: TripRequest) -> TripContext:
+async def post_trip(payload: TripRequest) -> TripContext:
     """
     Intake a trip in one of two modes:
     - flight_number: known flight number + departure date + home address
     - route_search: airline + route + time window + home address
     """
     if isinstance(payload, (FlightNumberTripRequest, RouteSearchTripRequest)):
-        return process_trip_intake(payload)
+        return await process_trip_intake(payload)
 
     raise UnsupportedModeError(getattr(payload, "input_mode", "unknown"))
