@@ -22,6 +22,7 @@ from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.airport_graph import resolve_walking_times
 from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.tsa_model import estimate_tsa_wait
+from app.services.trial import get_tier_info
 from app.services.trip_intake import get_trip_context
 
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
@@ -294,6 +295,7 @@ def _build_response(
     context: TripContext,
     snapshot: FlightSnapshot,
     computed_at: datetime,
+    user=None,
 ) -> RecommendationResponse:
     prefs = context.preferences
     segments = _compute_segments(context, snapshot)
@@ -347,6 +349,8 @@ def _build_response(
     if leave_home_in_past:
         explanation += " Warning: recommended departure time is in the past."
 
+    tier, remaining_pro_trips = get_tier_info(user)
+
     return RecommendationResponse(
         trip_id=trip_id,
         leave_home_at=leave_home_at,
@@ -357,11 +361,14 @@ def _build_response(
         segments=segments,
         computed_at=computed_at,
         leave_home_in_past=leave_home_in_past,
+        tier=tier,
+        remaining_pro_trips=remaining_pro_trips,
     )
 
 
 async def compute_recommendation(
     payload: RecommendationRequest,
+    user=None,
 ) -> RecommendationResponse | None:
     """
     Compute leave-home recommendation for the given trip.
@@ -372,11 +379,12 @@ async def compute_recommendation(
         return None
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    return _build_response(str(context.trip_id), context, snapshot, now)
+    return _build_response(str(context.trip_id), context, snapshot, now, user=user)
 
 
 async def recompute_recommendation(
     payload: RecommendationRecomputeRequest,
+    user=None,
 ) -> RecommendationResponse | None:
     """
     Recompute recommendation; uses preference_overrides when provided.
@@ -388,7 +396,7 @@ async def recompute_recommendation(
     context = _effective_context(context, payload.preference_overrides)
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    response = _build_response(payload.trip_id, context, snapshot, now)
+    response = _build_response(payload.trip_id, context, snapshot, now, user=user)
     if payload.reason:
         response.explanation = f"[Recompute: {payload.reason}] " + response.explanation
     return response

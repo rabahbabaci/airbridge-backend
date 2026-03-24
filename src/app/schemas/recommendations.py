@@ -62,3 +62,7 @@ class RecommendationResponse(BaseModel):
         False,
         description="True if the recommended departure time is in the past",
     )
+    tier: str = Field("free", description="User tier: 'pro' or 'free'")
+    remaining_pro_trips: int | None = Field(
+        None, description="Pro trips remaining before downgrade, None if subscribed or anonymous"
+    )
