@@ -122,6 +122,45 @@ def test_more_bags_produces_earlier_leave_home_at(client: TestClient) -> None:
     assert leave_high < leave_low
 
 
+def _create_route_search_trip(client: TestClient, **pref_overrides: object) -> str:
+    """Create a trip using route_search mode with EWR (no airport graph file)."""
+    payload: dict = {
+        "input_mode": "route_search",
+        "airline": "UA",
+        "origin_airport": "EWR",
+        "destination_airport": "LAX",
+        "departure_date": "2026-06-01",
+        "departure_time_window": "morning",
+        "home_address": "123 Main St, Newark, NJ 07102",
+    }
+    if pref_overrides:
+        payload["preferences"] = pref_overrides
+    r = client.post("/v1/trips", json=payload)
+    assert r.status_code == 201
+    return r.json()["trip_id"]
+
+
+def test_driving_mode_has_parking_segment(client: TestClient) -> None:
+    trip_id = _create_route_search_trip(client, transport_mode="driving")
+    response = client.post("/v1/recommendations", json={"trip_id": trip_id})
+    assert response.status_code == 200
+    segments = response.json()["segments"]
+    segment_ids = [s["id"] for s in segments]
+    assert "parking" in segment_ids
+    parking_seg = next(s for s in segments if s["id"] == "parking")
+    assert parking_seg["duration_minutes"] > 0
+    assert "Park" in parking_seg["label"]
+
+
+def test_rideshare_mode_no_parking_segment(client: TestClient) -> None:
+    trip_id = _create_route_search_trip(client, transport_mode="rideshare")
+    response = client.post("/v1/recommendations", json={"trip_id": trip_id})
+    assert response.status_code == 200
+    segments = response.json()["segments"]
+    segment_ids = [s["id"] for s in segments]
+    assert "parking" not in segment_ids
+
+
 def test_risk_profile_produces_later_leave_home_at_than_safety(
     client: TestClient,
 ) -> None:

@@ -118,7 +118,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
             walk_dropoff_to_checkin = timings["transit_to_terminal"]
         elif prefs.transport_mode == TransportMode.driving:
-            walk_dropoff_to_checkin = timings["parking_to_terminal"]
+            walk_dropoff_to_checkin = timings["curb_to_checkin"]
         else:
             walk_dropoff_to_checkin = timings["curb_to_checkin"]
         walk_checkin_to_security = timings["checkin_to_security"]
@@ -129,6 +129,24 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
             walk_dropoff_to_checkin = math.ceil(walk_dropoff_to_checkin * 1.4)
             walk_checkin_to_security = math.ceil(walk_checkin_to_security * 1.4)
             walk_security_to_gate = math.ceil(walk_security_to_gate * 1.4)
+
+    # 1b. Parking segment (flat-defaults, driving only)
+    if not using_graph and prefs.transport_mode == TransportMode.driving:
+        # Derive parking_min so that parking + walk_dropoff_to_checkin == old at_airport total.
+        # Children multiplier was already applied to walk_dropoff_to_checkin above,
+        # so compute the full parking_to_terminal with the same multiplier and subtract.
+        if prefs.traveling_with_children:
+            full_parking = math.ceil(timings["parking_to_terminal"] * 1.4)
+        else:
+            full_parking = timings["parking_to_terminal"]
+        parking_min = full_parking - walk_dropoff_to_checkin
+        if parking_min > 0:
+            segments.append(SegmentDetail(
+                id="parking",
+                label="Parking",
+                duration_minutes=parking_min,
+                advice=f"Park & walk to terminal at {origin_iata}" if origin_iata else "Park & walk to terminal",
+            ))
 
     # 2. At Airport — arrival waypoint
     bag_count = prefs.bag_count or 0
