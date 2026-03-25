@@ -19,9 +19,12 @@ async def lifespan(app: FastAPI):
         from app.db import Base, engine
 
         if engine is not None:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database connected — tables ensured via create_all")
+            try:
+                async with engine.begin() as conn:
+                    await conn.run_sync(Base.metadata.create_all)
+                logger.info("Database connected — tables ensured via create_all")
+            except Exception as e:
+                logger.warning("Database connection failed, running in in-memory mode: %s", e)
     else:
         logger.info("No DATABASE_URL configured — running in-memory mode")
     yield

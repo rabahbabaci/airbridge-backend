@@ -11,9 +11,11 @@ class Base(DeclarativeBase):
 
 
 def _make_async_url(url: str) -> str:
-    """Convert postgresql:// to postgresql+asyncpg:// for async driver."""
+    """Convert postgresql:// or postgres:// to postgresql+asyncpg:// for async driver."""
     if url.startswith("postgresql://"):
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
     return url
 
 
