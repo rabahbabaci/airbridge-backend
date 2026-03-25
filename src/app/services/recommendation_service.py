@@ -22,6 +22,7 @@ from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.airport_graph import resolve_walking_times
 from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.tsa_model import estimate_tsa_wait
+from app.services.trial import get_tier_info
 from app.services.trip_intake import get_trip_context
 
 CONFIDENCE_SCORES: dict[ConfidenceProfile, float] = {
@@ -118,7 +119,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
             walk_dropoff_to_checkin = timings["transit_to_terminal"]
         elif prefs.transport_mode == TransportMode.driving:
-            walk_dropoff_to_checkin = timings["parking_to_terminal"]
+            walk_dropoff_to_checkin = timings["curb_to_checkin"]
         else:
             walk_dropoff_to_checkin = timings["curb_to_checkin"]
         walk_checkin_to_security = timings["checkin_to_security"]
@@ -129,6 +130,24 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
             walk_dropoff_to_checkin = math.ceil(walk_dropoff_to_checkin * 1.4)
             walk_checkin_to_security = math.ceil(walk_checkin_to_security * 1.4)
             walk_security_to_gate = math.ceil(walk_security_to_gate * 1.4)
+
+    # 1b. Parking segment (flat-defaults, driving only)
+    if not using_graph and prefs.transport_mode == TransportMode.driving:
+        # Derive parking_min so that parking + walk_dropoff_to_checkin == old at_airport total.
+        # Children multiplier was already applied to walk_dropoff_to_checkin above,
+        # so compute the full parking_to_terminal with the same multiplier and subtract.
+        if prefs.traveling_with_children:
+            full_parking = math.ceil(timings["parking_to_terminal"] * 1.4)
+        else:
+            full_parking = timings["parking_to_terminal"]
+        parking_min = full_parking - walk_dropoff_to_checkin
+        if parking_min > 0:
+            segments.append(SegmentDetail(
+                id="parking",
+                label="Parking",
+                duration_minutes=parking_min,
+                advice=f"Park & walk to terminal at {origin_iata}" if origin_iata else "Park & walk to terminal",
+            ))
 
     # 2. At Airport — arrival waypoint
     bag_count = prefs.bag_count or 0
@@ -276,6 +295,7 @@ def _build_response(
     context: TripContext,
     snapshot: FlightSnapshot,
     computed_at: datetime,
+    user=None,
 ) -> RecommendationResponse:
     prefs = context.preferences
     segments = _compute_segments(context, snapshot)
@@ -329,6 +349,8 @@ def _build_response(
     if leave_home_in_past:
         explanation += " Warning: recommended departure time is in the past."
 
+    tier, remaining_pro_trips = get_tier_info(user)
+
     return RecommendationResponse(
         trip_id=trip_id,
         leave_home_at=leave_home_at,
@@ -339,38 +361,42 @@ def _build_response(
         segments=segments,
         computed_at=computed_at,
         leave_home_in_past=leave_home_in_past,
+        tier=tier,
+        remaining_pro_trips=remaining_pro_trips,
     )
 
 
-def compute_recommendation(
+async def compute_recommendation(
     payload: RecommendationRequest,
+    user=None,
 ) -> RecommendationResponse | None:
     """
     Compute leave-home recommendation for the given trip.
     Returns None if trip_id is not found (caller should return 404).
     """
-    context = get_trip_context(payload.trip_id)
+    context = await get_trip_context(payload.trip_id)
     if context is None:
         return None
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    return _build_response(str(context.trip_id), context, snapshot, now)
+    return _build_response(str(context.trip_id), context, snapshot, now, user=user)
 
 
-def recompute_recommendation(
+async def recompute_recommendation(
     payload: RecommendationRecomputeRequest,
+    user=None,
 ) -> RecommendationResponse | None:
     """
     Recompute recommendation; uses preference_overrides when provided.
     Returns None if trip_id is not found.
     """
-    context = get_trip_context(payload.trip_id)
+    context = await get_trip_context(payload.trip_id)
     if context is None:
         return None
     context = _effective_context(context, payload.preference_overrides)
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    response = _build_response(payload.trip_id, context, snapshot, now)
+    response = _build_response(payload.trip_id, context, snapshot, now, user=user)
     if payload.reason:
         response.explanation = f"[Recompute: {payload.reason}] " + response.explanation
     return response

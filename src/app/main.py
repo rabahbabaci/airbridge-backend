@@ -1,15 +1,43 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import health, recommendations, trips, version, flights
+from app.api.routes import auth, health, recommendations, trips, version, flights
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    if settings.database_url:
+        from app.db import Base, engine
+
+        if engine is not None:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database connected — tables ensured via create_all")
+    else:
+        logger.info("No DATABASE_URL configured — running in-memory mode")
+    yield
+    # Shutdown
+    if settings.database_url:
+        from app.db import engine
+
+        if engine is not None:
+            await engine.dispose()
+
 
 app = FastAPI(
     title="AirBridge API",
     description="Door-to-gate departure decision engine",
     version=settings.app_version,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -41,3 +69,4 @@ app.include_router(version.router)
 app.include_router(trips.router, prefix="/v1")
 app.include_router(recommendations.router, prefix="/v1")
 app.include_router(flights.router, prefix="/v1")
+app.include_router(auth.router, prefix="/v1")
