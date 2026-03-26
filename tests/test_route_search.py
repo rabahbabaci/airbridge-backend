@@ -5,55 +5,68 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 
-def _make_raw_departure(
+def _make_fids_departure(
     flight_number: str,
-    origin_iata: str,
     dest_iata: str,
     dep_local: str,
     airline_name: str = "United Airlines",
     status: str = "Scheduled",
+    dest_name: str | None = None,
 ) -> dict:
-    """Build a mock AeroDataBox raw flight object (pre-parse_flight format)."""
+    """Build a mock AeroDataBox FIDS departure object (movement-based format)."""
+    dest_airport = {"name": dest_name or f"{dest_iata} Airport"}
+    if dest_iata:
+        dest_airport["iata"] = dest_iata
     return {
         "number": flight_number,
         "status": status,
         "airline": {"name": airline_name},
         "aircraft": {"model": "Boeing 737"},
-        "departure": {
-            "airport": {"iata": origin_iata, "name": f"{origin_iata} Airport"},
-            "scheduledTime": {"utc": dep_local.replace(" ", "T") + "Z", "local": dep_local.replace(" ", "T")},
+        "movement": {
+            "airport": dest_airport,
+            "scheduledTime": {
+                "utc": dep_local.replace(" ", "T") + "Z",
+                "local": dep_local.replace(" ", "T"),
+            },
             "revisedTime": {},
             "terminal": "1",
             "gate": "A1",
         },
-        "arrival": {
-            "airport": {"iata": dest_iata, "name": f"{dest_iata} Airport"},
-            "scheduledTime": {"utc": dep_local.replace(" ", "T") + "Z", "local": dep_local.replace(" ", "T")},
-            "revisedTime": {},
-            "terminal": "2",
-        },
     }
 
 
-MOCK_DEPARTURES_RAW = [
-    _make_raw_departure("UA300", "SFO", "LAX", "2026-04-01 08:00", "United Airlines"),
-    _make_raw_departure("UA400", "SFO", "LAX", "2026-04-01 14:30", "United Airlines"),
-    _make_raw_departure("DL100", "SFO", "JFK", "2026-04-01 09:00", "Delta Air Lines"),
-    _make_raw_departure("AA200", "SFO", "LAX", "2026-04-01 19:00", "American Airlines"),
-    _make_raw_departure("UA500", "SFO", "LAX", "2026-04-01 23:30", "United Airlines"),
+# Morning window flights (00:00–11:59)
+MORNING_WINDOW = [
+    _make_fids_departure("UA300", "LAX", "2026-04-01 08:00", "United Airlines"),
+    _make_fids_departure("DL100", "JFK", "2026-04-01 09:00", "Delta Air Lines"),
+]
+
+# Afternoon/evening window flights (12:00–23:59)
+AFTERNOON_WINDOW = [
+    _make_fids_departure("UA400", "LAX", "2026-04-01 14:30", "United Airlines"),
+    _make_fids_departure("AA200", "LAX", "2026-04-01 19:00", "American Airlines"),
+    _make_fids_departure("UA500", "LAX", "2026-04-01 23:30", "United Airlines"),
+    # Flight with no destination IATA — should be skipped
+    _make_fids_departure("XX999", "", "2026-04-01 15:00", "Mystery Air", dest_name="San Diego"),
 ]
 
 
-def _mock_departures_api(iata, from_local, to_local, **kwargs):
-    """Mock httpx response for AeroDataBox departures endpoint."""
+def _mock_get(url, **kwargs):
+    """Return different data for the two 12-hour windows."""
 
     class MockResponse:
         status_code = 200
 
-        def json(self):
-            return {"departures": MOCK_DEPARTURES_RAW}
+        def __init__(self, departures):
+            self._departures = departures
 
-    return MockResponse()
+        def json(self):
+            return {"departures": self._departures}
+
+    if "T00:00" in url:
+        return MockResponse(MORNING_WINDOW)
+    else:
+        return MockResponse(AFTERNOON_WINDOW)
 
 
 class TestFlightSearch:
@@ -61,7 +74,7 @@ class TestFlightSearch:
         with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
             mock_cls.return_value.__enter__ = lambda s: s
             mock_cls.return_value.__exit__ = lambda s, *a: None
-            mock_cls.return_value.get = lambda url, **kw: _mock_departures_api(None, None, None)
+            mock_cls.return_value.get = _mock_get
 
             resp = client.get("/v1/flights/search", params={
                 "origin": "SFO",
@@ -70,9 +83,8 @@ class TestFlightSearch:
             })
 
         assert resp.status_code == 200
-        data = resp.json()
-        flights = data["flights"]
-        # Only LAX-bound flights (UA300, UA400, AA200, UA500) — not DL100 (JFK)
+        flights = resp.json()["flights"]
+        # LAX-bound: UA300, UA400, AA200, UA500 — not DL100 (JFK) or XX999 (no IATA)
         assert len(flights) == 4
         for f in flights:
             assert f["destination_iata"] == "LAX"
@@ -81,7 +93,7 @@ class TestFlightSearch:
         with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
             mock_cls.return_value.__enter__ = lambda s: s
             mock_cls.return_value.__exit__ = lambda s, *a: None
-            mock_cls.return_value.get = lambda url, **kw: _mock_departures_api(None, None, None)
+            mock_cls.return_value.get = _mock_get
 
             resp = client.get("/v1/flights/search", params={
                 "origin": "SFO",
@@ -100,7 +112,7 @@ class TestFlightSearch:
         with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
             mock_cls.return_value.__enter__ = lambda s: s
             mock_cls.return_value.__exit__ = lambda s, *a: None
-            mock_cls.return_value.get = lambda url, **kw: _mock_departures_api(None, None, None)
+            mock_cls.return_value.get = _mock_get
 
             resp = client.get("/v1/flights/search", params={
                 "origin": "SFO",
@@ -118,7 +130,7 @@ class TestFlightSearch:
         with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
             mock_cls.return_value.__enter__ = lambda s: s
             mock_cls.return_value.__exit__ = lambda s, *a: None
-            mock_cls.return_value.get = lambda url, **kw: _mock_departures_api(None, None, None)
+            mock_cls.return_value.get = _mock_get
 
             resp = client.get("/v1/flights/search", params={
                 "origin": "SFO",
@@ -135,3 +147,37 @@ class TestFlightSearch:
             "date": "2026-04-01",
         })
         assert resp.status_code == 422
+
+    def test_missing_iata_flights_are_skipped(self, client: TestClient):
+        """Flights without a destination IATA code are silently excluded."""
+        with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
+            mock_cls.return_value.__enter__ = lambda s: s
+            mock_cls.return_value.__exit__ = lambda s, *a: None
+            mock_cls.return_value.get = _mock_get
+
+            resp = client.get("/v1/flights/search", params={
+                "origin": "SFO",
+                "destination": "LAX",
+                "date": "2026-04-01",
+            })
+
+        flights = resp.json()["flights"]
+        flight_numbers = [f["flight_number"] for f in flights]
+        assert "XX999" not in flight_numbers
+
+    def test_origin_iata_set_from_query(self, client: TestClient):
+        """The origin_iata field should be set to the queried airport."""
+        with patch("app.services.integrations.aerodatabox.httpx.Client") as mock_cls:
+            mock_cls.return_value.__enter__ = lambda s: s
+            mock_cls.return_value.__exit__ = lambda s, *a: None
+            mock_cls.return_value.get = _mock_get
+
+            resp = client.get("/v1/flights/search", params={
+                "origin": "SFO",
+                "destination": "LAX",
+                "date": "2026-04-01",
+            })
+
+        flights = resp.json()["flights"]
+        for f in flights:
+            assert f["origin_iata"] == "SFO"
