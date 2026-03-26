@@ -60,6 +60,43 @@ def parse_flight(raw: dict) -> dict:
     }
 
 
+def lookup_airport_departures(iata: str, date_str: str) -> list[dict]:
+    """Call AeroDataBox FIDS/Departures endpoint for all departures from an airport on a date."""
+    try:
+        iata = iata.strip().upper()
+        from_local = f"{date_str}T00:00"
+        to_local = f"{date_str}T23:59"
+        url = f"https://aerodatabox.p.rapidapi.com/flights/airports/iata/{iata}/{from_local}/{to_local}"
+        headers = {
+            "x-rapidapi-host": "aerodatabox.p.rapidapi.com",
+            "x-rapidapi-key": settings.rapidapi_key,
+        }
+        params = {
+            "withAircraftImage": "false",
+            "withLocation": "false",
+            "direction": "Departure",
+        }
+        with httpx.Client(timeout=15) as client:
+            response = client.get(url, headers=headers, params=params)
+        if response.status_code != 200:
+            logger.warning(
+                "AeroDataBox departures API returned status %s for %s on %s",
+                response.status_code,
+                iata,
+                date_str,
+            )
+            return []
+        data = response.json()
+        departures = data.get("departures", [])
+        if not isinstance(departures, list):
+            logger.warning("AeroDataBox departures returned non-list for %s on %s", iata, date_str)
+            return []
+        return [parse_flight(f) for f in departures]
+    except Exception as e:
+        logger.exception("AeroDataBox departures lookup failed for %s on %s: %s", iata, date_str, e)
+        return []
+
+
 def lookup_flights(flight_number: str, date_str: str) -> list[dict]:
     """Call AeroDataBox Flight status (specific date) API and return parsed flights."""
     try:
