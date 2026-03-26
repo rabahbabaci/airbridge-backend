@@ -1,6 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -8,6 +9,13 @@ from fastapi.exceptions import RequestValidationError
 from app.api.routes import auth, health, recommendations, trips, version, flights
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        profiles_sample_rate=0.1,
+    )
 
 logger = logging.getLogger(__name__)
 

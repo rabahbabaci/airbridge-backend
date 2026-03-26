@@ -15,6 +15,7 @@ class Settings:
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_key: str = os.getenv("SUPABASE_KEY", "")
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
+    sentry_dsn: str = os.getenv("SENTRY_DSN", "")
 
 
 settings = Settings()
