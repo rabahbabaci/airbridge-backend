@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import auth, health, recommendations, trips, version, flights
+from app.api.routes import auth, events, health, recommendations, trips, version, flights
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
 
@@ -81,3 +81,4 @@ app.include_router(trips.router, prefix="/v1")
 app.include_router(recommendations.router, prefix="/v1")
 app.include_router(flights.router, prefix="/v1")
 app.include_router(auth.router, prefix="/v1")
+app.include_router(events.router, prefix="/v1/events")
