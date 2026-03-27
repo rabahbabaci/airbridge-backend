@@ -1,7 +1,10 @@
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 
-def test_send_otp_service_not_configured(client: TestClient) -> None:
+@patch("app.api.routes.auth._get_supabase", return_value=None)
+def test_send_otp_service_not_configured(_mock, client: TestClient) -> None:
     response = client.post(
         "/v1/auth/send-otp", json={"phone_number": "+1234567890"}
     )
@@ -9,7 +12,8 @@ def test_send_otp_service_not_configured(client: TestClient) -> None:
     assert response.json()["detail"] == "Auth service not configured"
 
 
-def test_verify_otp_service_not_configured(client: TestClient) -> None:
+@patch("app.api.routes.auth._get_supabase", return_value=None)
+def test_verify_otp_service_not_configured(_mock, client: TestClient) -> None:
     response = client.post(
         "/v1/auth/verify-otp",
         json={"phone_number": "+1234567890", "code": "123456"},

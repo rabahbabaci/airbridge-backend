@@ -3,6 +3,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.flight_snapshot_service import get_available_flights
+from app.services.integrations.aerodatabox import lookup_airport_departures
 from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.tsa_model import estimate_tsa_wait
@@ -12,6 +13,13 @@ router = APIRouter(prefix="/flights", tags=["flights"])
 DEPARTED_STATUSES = {"departed", "landed", "arrived"}
 BOARDING_STATUSES = {"boarding"}
 CANCELED_STATUSES = {"canceled", "cancelled", "diverted"}
+
+TIME_WINDOW_RANGES = {
+    "morning": (5, 12),
+    "afternoon": (12, 18),
+    "evening": (18, 22),
+    "red_eye": (22, 5),
+}
 
 
 def _parse_utc(utc_str: str | None) -> datetime | None:
@@ -44,21 +52,13 @@ def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: i
     return total
 
 
-@router.get("/{flight_number}/{date}")
-def get_flights(
-    flight_number: str,
-    date: str,
-    home_address: str = Query(default=""),
-):
-    result = get_available_flights(flight_number, date)
-    if not result:
-        raise HTTPException(status_code=404, detail="No flights found for this flight number and date")
-
+def enrich_flights(flights: list[dict], home_address: str = "") -> list[dict]:
+    """Add departed/canceled/catchable/time_warning flags to a list of parsed flights."""
     now = datetime.now(tz=timezone.utc)
     drive_cache: dict[str, int] = {}
-
     enriched = []
-    for flight in result:
+
+    for flight in flights:
         status = (flight.get("status") or "Unknown").strip().lower()
 
         # 1. Flight already departed/landed
@@ -161,4 +161,107 @@ def get_flights(
 
         enriched.append(flight)
 
+    return enriched
+
+
+@router.get("/{flight_number}/{date}")
+def get_flights(
+    flight_number: str,
+    date: str,
+    home_address: str = Query(default=""),
+):
+    result = get_available_flights(flight_number, date)
+    if not result:
+        raise HTTPException(status_code=404, detail="No flights found for this flight number and date")
+
+    enriched = enrich_flights(result, home_address)
+    return {"flights": enriched}
+
+
+def _extract_local_hour(local_str: str | None) -> int | None:
+    """Extract hour from a local time string like '2026-03-07 06:00'."""
+    if not local_str:
+        return None
+    try:
+        return datetime.fromisoformat(local_str.strip()).hour
+    except (ValueError, TypeError):
+        return None
+
+
+def _matches_time_window(flight: dict, time_window: str) -> bool:
+    """Check if a flight's local departure hour falls within the given time window."""
+    local_str = flight.get("departure_time_local")
+    hour = _extract_local_hour(local_str)
+    if hour is None:
+        return True  # can't filter without time info, include it
+
+    rng = TIME_WINDOW_RANGES.get(time_window)
+    if rng is None:
+        return True
+
+    start, end = rng
+    if start < end:
+        return start <= hour < end
+    else:
+        # wraps around midnight (red_eye: 22-5)
+        return hour >= start or hour < end
+
+
+def _matches_airline(flight: dict, airline_query: str) -> bool:
+    """Match on IATA airline code (from flight_number prefix) or airline name, case-insensitive partial."""
+    query = airline_query.strip().lower()
+    if not query:
+        return True
+
+    # Check airline_name
+    airline_name = (flight.get("airline_name") or "").lower()
+    if query in airline_name:
+        return True
+
+    # Check IATA code prefix of flight_number (e.g. "UA" from "UA300")
+    flight_num = (flight.get("flight_number") or "").upper()
+    iata_code = ""
+    for ch in flight_num:
+        if ch.isalpha():
+            iata_code += ch
+        else:
+            break
+    if iata_code and query == iata_code.lower():
+        return True
+
+    return False
+
+
+@router.get("/search")
+def search_flights(
+    origin: str = Query(..., min_length=3, max_length=4),
+    destination: str = Query(..., min_length=3, max_length=4),
+    date: str = Query(..., min_length=10, max_length=10),
+    time_window: str | None = Query(default=None),
+    airline: str | None = Query(default=None),
+    home_address: str = Query(default=""),
+):
+    departures = lookup_airport_departures(origin, date)
+    if not departures:
+        return {"flights": []}
+
+    # Filter by destination
+    dest_upper = destination.strip().upper()
+    filtered = [
+        f for f in departures
+        if (f.get("destination_iata") or "").upper() == dest_upper
+    ]
+
+    # Filter by time window
+    if time_window:
+        filtered = [f for f in filtered if _matches_time_window(f, time_window)]
+
+    # Filter by airline
+    if airline:
+        filtered = [f for f in filtered if _matches_airline(f, airline)]
+
+    if not filtered:
+        return {"flights": []}
+
+    enriched = enrich_flights(filtered, home_address)
     return {"flights": enriched}

@@ -54,3 +54,12 @@ Tests use pytest with `asyncio_mode = "auto"`. Test client is FastAPI's TestClie
 ## Environment Variables
 
 Required in `.env`: `RAPIDAPI_KEY` (AeroDataBox), `GOOGLE_MAPS_API_KEY`. See `.env` for full list.
+
+## Database Backup Protocol
+
+Before running any Alembic migration against production, take a backup:
+```bash
+pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql
+```
+
+Run this from your local machine or Railway shell. Verify the backup file is non-empty before proceeding with the migration.
