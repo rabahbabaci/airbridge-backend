@@ -77,9 +77,10 @@ class TestSocialAuthEndpoint:
         assert resp1.json()["user_id"] == resp2.json()["user_id"]
 
     def test_service_not_configured_returns_503(self, client: TestClient):
-        resp = client.post(
-            "/v1/auth/social",
-            json={"provider": "google", "id_token": "some-token"},
-        )
+        with patch("app.api.routes.auth._get_supabase", return_value=None):
+            resp = client.post(
+                "/v1/auth/social",
+                json={"provider": "google", "id_token": "some-token"},
+            )
         assert resp.status_code == 503
         assert resp.json()["detail"] == "Auth service not configured"

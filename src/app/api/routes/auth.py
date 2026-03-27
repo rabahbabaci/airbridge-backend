@@ -104,6 +104,8 @@ async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
     user_id = None
     trip_count = 0
     subscription_status = "none"
+    display_name = None
+    email = None
 
     if db is not None:
         stmt = select(User).where(User.phone_number == body.phone_number)
@@ -120,6 +122,8 @@ async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
         user_id = str(row.id)
         trip_count = row.trip_count
         subscription_status = row.subscription_status
+        display_name = row.display_name
+        email = row.email
 
     token = _generate_jwt(user_id, phone_number=body.phone_number)
     tier = _compute_tier(trip_count, subscription_status)
@@ -129,6 +133,8 @@ async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
         "token": token,
         "trip_count": trip_count,
         "tier": tier,
+        "display_name": display_name,
+        "email": email,
     }
 
 
@@ -151,13 +157,27 @@ async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
         logger.exception("Supabase social auth failed for provider=%s", body.provider)
         raise HTTPException(status_code=401, detail="Authentication failed")
 
-    email = getattr(result.user, "email", None)
+    supabase_user = result.user
+    email = getattr(supabase_user, "email", None)
     if not email:
         raise HTTPException(status_code=400, detail="Email not provided by auth provider")
+
+    # Extract display name from provider metadata (Google uses full_name/name)
+    user_metadata = getattr(supabase_user, "user_metadata", None) or {}
+    provider_name = (
+        user_metadata.get("full_name")
+        or user_metadata.get("name")
+        or body.display_name
+    )
+    logger.info(
+        "Social auth user_metadata for provider=%s email=%s: %s",
+        body.provider, email, user_metadata,
+    )
 
     user_id = None
     trip_count = 0
     subscription_status = "none"
+    display_name = provider_name
 
     if db is not None:
         stmt = select(User).where(User.email == email)
@@ -166,7 +186,7 @@ async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
             row = User(
                 email=email,
                 auth_provider=body.provider,
-                display_name=body.display_name,
+                display_name=provider_name,
                 trip_count=0,
                 subscription_status="none",
             )
@@ -176,13 +196,14 @@ async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
         else:
             if row.auth_provider is None:
                 row.auth_provider = body.provider
-            if row.display_name is None and body.display_name:
-                row.display_name = body.display_name
+            if row.display_name is None and provider_name:
+                row.display_name = provider_name
             await db.commit()
             await db.refresh(row)
         user_id = str(row.id)
         trip_count = row.trip_count
         subscription_status = row.subscription_status
+        display_name = row.display_name
 
     token = _generate_jwt(user_id, email=email)
     tier = _compute_tier(trip_count, subscription_status)
@@ -192,4 +213,6 @@ async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
         "token": token,
         "trip_count": trip_count,
         "tier": tier,
+        "display_name": display_name,
+        "email": email,
     }

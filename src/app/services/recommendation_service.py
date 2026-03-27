@@ -114,6 +114,26 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
         walk_dropoff_to_checkin = graph_times["entry_to_checkin"]
         walk_checkin_to_security = graph_times["checkin_to_tsa"]
         walk_security_to_gate = graph_times["tsa_to_gate"]
+
+        # 1b. Parking segment (graph path, driving only)
+        # The graph's entry_to_checkin includes parking walk time for drivers.
+        # Extract it as a separate segment using airport_defaults values.
+        if prefs.transport_mode == TransportMode.driving:
+            if prefs.traveling_with_children:
+                full_parking = math.ceil(timings["parking_to_terminal"] * 1.4)
+                walk_curb = math.ceil(timings["curb_to_checkin"] * 1.4)
+            else:
+                full_parking = timings["parking_to_terminal"]
+                walk_curb = timings["curb_to_checkin"]
+            parking_min = full_parking - walk_curb
+            if parking_min > 0:
+                segments.append(SegmentDetail(
+                    id="parking",
+                    label="Parking",
+                    duration_minutes=parking_min,
+                    advice=f"Park & walk to terminal at {origin_iata}" if origin_iata else "Park & walk to terminal",
+                ))
+                walk_dropoff_to_checkin = max(walk_dropoff_to_checkin - parking_min, 0)
     else:
         # Flat defaults from airport_defaults.py
         if prefs.transport_mode in (TransportMode.train, TransportMode.bus):
