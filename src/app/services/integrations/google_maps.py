@@ -1,7 +1,9 @@
 import asyncio
+import json
 import logging
 import math
 import time
+from pathlib import Path
 
 import httpx
 
@@ -32,6 +34,94 @@ AIRPORT_DESTINATIONS: dict[str, str] = {
 def get_airport_destination(iata_code: str) -> str:
     """Return Google Maps–friendly airport name for IATA code, or '{code} Airport'."""
     return AIRPORT_DESTINATIONS.get(iata_code.upper() if iata_code else "", f"{iata_code or ''} Airport")
+
+
+# --- Terminal coordinates (static JSON + geocoding fallback) ---
+
+_TERMINAL_COORDS_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "terminal_coordinates.json"
+_terminal_coords_cache: dict[str, dict[str, dict[str, float]]] | None = None
+
+
+def _load_terminal_coords() -> dict[str, dict[str, dict[str, float]]]:
+    global _terminal_coords_cache
+    if _terminal_coords_cache is None:
+        with open(_TERMINAL_COORDS_PATH) as f:
+            data = json.load(f)
+        data.pop("_TODO", None)
+        _terminal_coords_cache = data
+    return _terminal_coords_cache
+
+
+def get_terminal_coordinates(iata: str, terminal: str | None) -> dict | None:
+    """Return {"lat": ..., "lng": ...} for an airport terminal.
+
+    Lookup order:
+    1. Exact terminal match in static file
+    2. "default" entry for that airport
+    3. Geocoding API fallback for airports not in the static file
+    """
+    code = (iata or "").upper()
+    coords = _load_terminal_coords()
+    airport_entry = coords.get(code)
+    if airport_entry is not None:
+        if terminal and terminal in airport_entry:
+            return airport_entry[terminal]
+        return airport_entry.get("default")
+
+    # Geocoding fallback for airports not in the static file
+    airport_name = AIRPORT_DESTINATIONS.get(code)
+    if not airport_name:
+        return None
+    if terminal:
+        query = f"{airport_name} Terminal {terminal} Departures"
+    else:
+        query = f"{airport_name} Departures"
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={"address": query, "key": settings.google_maps_api_key},
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results") or []
+            if not results:
+                return None
+            loc = results[0].get("geometry", {}).get("location", {})
+            return {"lat": loc.get("lat", 0.0), "lng": loc.get("lng", 0.0)}
+    except Exception:
+        logger.exception("Geocode fallback failed for %s terminal %s", code, terminal)
+        return None
+
+
+# --- Home address geocoding ---
+
+_geocode_cache: dict[str, dict[str, float]] = {}
+
+
+def geocode_address(address: str) -> dict | None:
+    """Geocode a street address via Google Maps. Returns {"lat": ..., "lng": ...} or None.
+
+    Results are cached in-memory so repeated calls with the same address skip the API.
+    """
+    if address in _geocode_cache:
+        return _geocode_cache[address]
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={"address": address, "key": settings.google_maps_api_key},
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results") or []
+            if not results:
+                return None
+            loc = results[0].get("geometry", {}).get("location", {})
+            result = {"lat": loc.get("lat", 0.0), "lng": loc.get("lng", 0.0)}
+            _geocode_cache[address] = result
+            return result
+    except Exception:
+        logger.exception("Geocode failed for address: %s", address)
+        return None
 
 
 def _travel_label(transport_mode: str, airport_iata: str) -> str:

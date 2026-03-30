@@ -1,0 +1,100 @@
+{
+  "_TODO": "Replace placeholder coordinates with accurate lat/lng from Google Maps before deploy",
+  "SFO": {
+    "1": {"lat": 0.0, "lng": 0.0},
+    "2": {"lat": 0.0, "lng": 0.0},
+    "3": {"lat": 0.0, "lng": 0.0},
+    "I": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "OAK": {
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "SJC": {
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "LAX": {
+    "1": {"lat": 0.0, "lng": 0.0},
+    "2": {"lat": 0.0, "lng": 0.0},
+    "3": {"lat": 0.0, "lng": 0.0},
+    "4": {"lat": 0.0, "lng": 0.0},
+    "5": {"lat": 0.0, "lng": 0.0},
+    "6": {"lat": 0.0, "lng": 0.0},
+    "7": {"lat": 0.0, "lng": 0.0},
+    "8": {"lat": 0.0, "lng": 0.0},
+    "B": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "JFK": {
+    "1": {"lat": 0.0, "lng": 0.0},
+    "2": {"lat": 0.0, "lng": 0.0},
+    "4": {"lat": 0.0, "lng": 0.0},
+    "5": {"lat": 0.0, "lng": 0.0},
+    "7": {"lat": 0.0, "lng": 0.0},
+    "8": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "ORD": {
+    "1": {"lat": 0.0, "lng": 0.0},
+    "2": {"lat": 0.0, "lng": 0.0},
+    "3": {"lat": 0.0, "lng": 0.0},
+    "5": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "EWR": {
+    "A": {"lat": 0.0, "lng": 0.0},
+    "B": {"lat": 0.0, "lng": 0.0},
+    "C": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "ATL": {
+    "N": {"lat": 0.0, "lng": 0.0},
+    "S": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "DFW": {
+    "A": {"lat": 0.0, "lng": 0.0},
+    "B": {"lat": 0.0, "lng": 0.0},
+    "C": {"lat": 0.0, "lng": 0.0},
+    "D": {"lat": 0.0, "lng": 0.0},
+    "E": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "DEN": {
+    "A": {"lat": 0.0, "lng": 0.0},
+    "B": {"lat": 0.0, "lng": 0.0},
+    "C": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "SEA": {
+    "N": {"lat": 0.0, "lng": 0.0},
+    "S": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "MIA": {
+    "D": {"lat": 0.0, "lng": 0.0},
+    "E": {"lat": 0.0, "lng": 0.0},
+    "F": {"lat": 0.0, "lng": 0.0},
+    "G": {"lat": 0.0, "lng": 0.0},
+    "H": {"lat": 0.0, "lng": 0.0},
+    "J": {"lat": 0.0, "lng": 0.0},
+    "N": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "BOS": {
+    "A": {"lat": 0.0, "lng": 0.0},
+    "B": {"lat": 0.0, "lng": 0.0},
+    "C": {"lat": 0.0, "lng": 0.0},
+    "E": {"lat": 0.0, "lng": 0.0},
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "SAN": {
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "SNA": {
+    "default": {"lat": 0.0, "lng": 0.0}
+  },
+  "STS": {
+    "default": {"lat": 0.0, "lng": 0.0}
+  }
+}
