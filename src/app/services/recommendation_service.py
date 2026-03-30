@@ -20,7 +20,11 @@ from app.schemas.trips import (
 from app.services.flight_snapshot_service import build_flight_snapshot
 from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.airport_graph import resolve_walking_times
-from app.services.integrations.google_maps import get_drive_time
+from app.services.integrations.google_maps import (
+    geocode_address,
+    get_drive_time,
+    get_terminal_coordinates,
+)
 from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trial import get_tier_info
 from app.services.trip_intake import get_trip_context
@@ -371,6 +375,11 @@ def _build_response(
 
     tier, remaining_pro_trips = get_tier_info(user)
 
+    # Resolve coordinates for map display
+    origin_iata = snapshot.origin_airport_code or ""
+    terminal_coords = get_terminal_coordinates(origin_iata, snapshot.departure_terminal)
+    home_coords = geocode_address(context.home_address)
+
     return RecommendationResponse(
         trip_id=trip_id,
         leave_home_at=leave_home_at,
@@ -383,6 +392,8 @@ def _build_response(
         leave_home_in_past=leave_home_in_past,
         tier=tier,
         remaining_pro_trips=remaining_pro_trips,
+        terminal_coordinates=terminal_coords,
+        home_coordinates=home_coords,
     )
 
 

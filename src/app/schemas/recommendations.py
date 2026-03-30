@@ -66,3 +66,9 @@ class RecommendationResponse(BaseModel):
     remaining_pro_trips: int | None = Field(
         None, description="Pro trips remaining before downgrade, None if subscribed or anonymous"
     )
+    terminal_coordinates: dict | None = Field(
+        None, description="Lat/lng of the departure terminal, if available"
+    )
+    home_coordinates: dict | None = Field(
+        None, description="Lat/lng of the user's home address, if available"
+    )
