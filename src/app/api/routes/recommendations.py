@@ -1,7 +1,13 @@
+import json
+import logging
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 
 from app.api.middleware.auth import get_optional_user
-from app.db.models import User
+from app.db import get_db
+from app.db.models import Trip as TripRow, User
 from app.schemas.recommendations import (
     RecommendationRecomputeRequest,
     RecommendationRequest,
@@ -11,6 +17,8 @@ from app.services.recommendation_service import (
     compute_recommendation,
     recompute_recommendation,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -31,9 +39,27 @@ async def post_recommendation(
 async def post_recommendation_recompute(
     payload: RecommendationRecomputeRequest,
     user: User | None = Depends(get_optional_user),
+    db=Depends(get_db),
 ) -> RecommendationResponse:
     """Recompute recommendation for an existing trip; optionally pass preference_overrides."""
     response = await recompute_recommendation(payload, user=user)
     if response is None:
         raise HTTPException(status_code=404, detail="Trip not found")
+
+    # Persist preference overrides to the Trip row (best-effort)
+    if payload.preference_overrides is not None and db is not None:
+        try:
+            tid = uuid.UUID(payload.trip_id)
+            trip_row = await db.get(TripRow, tid)
+            if trip_row is not None:
+                existing = {}
+                if trip_row.preferences_json:
+                    existing = json.loads(trip_row.preferences_json)
+                overrides = payload.preference_overrides.model_dump(exclude_none=True)
+                existing.update(overrides)
+                trip_row.preferences_json = json.dumps(existing)
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to persist preference overrides for trip %s", payload.trip_id)
+
     return response
