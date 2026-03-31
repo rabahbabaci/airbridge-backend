@@ -1,31 +1,38 @@
 """Tests for GET /v1/users/me and PUT /v1/users/preferences."""
 
 import uuid
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.middleware.auth import get_required_user
+from app.db import get_db
 from app.main import app
 
 
+class FakeUser:
+    def __init__(self, **kwargs):
+        self.id = kwargs.get("id", uuid.uuid4())
+        self.email = kwargs.get("email", "test@example.com")
+        self.phone_number = kwargs.get("phone_number", "+1234567890")
+        self.display_name = kwargs.get("display_name", "Test User")
+        self.auth_provider = kwargs.get("auth_provider", "google")
+        self.trip_count = kwargs.get("trip_count", 1)
+        self.subscription_status = kwargs.get("subscription_status", "none")
+        self.preferred_transport_mode = kwargs.get("preferred_transport_mode", None)
+        self.preferred_security_access = kwargs.get("preferred_security_access", None)
+        self.preferred_bag_count = kwargs.get("preferred_bag_count", None)
+        self.preferred_children = kwargs.get("preferred_children", None)
+        self.preferred_nav_app = kwargs.get("preferred_nav_app", None)
+        self.preferred_rideshare_app = kwargs.get("preferred_rideshare_app", None)
+
+
 def _make_mock_user(**overrides):
-    user = MagicMock()
-    user.id = overrides.get("id", uuid.uuid4())
-    user.email = overrides.get("email", "test@example.com")
-    user.phone_number = overrides.get("phone_number", "+1234567890")
-    user.display_name = overrides.get("display_name", "Test User")
-    user.auth_provider = overrides.get("auth_provider", "google")
-    user.trip_count = overrides.get("trip_count", 1)
-    user.subscription_status = overrides.get("subscription_status", "none")
-    user.preferred_transport_mode = overrides.get("preferred_transport_mode", None)
-    user.preferred_security_access = overrides.get("preferred_security_access", None)
-    user.preferred_bag_count = overrides.get("preferred_bag_count", None)
-    user.preferred_children = overrides.get("preferred_children", None)
-    user.preferred_nav_app = overrides.get("preferred_nav_app", None)
-    user.preferred_rideshare_app = overrides.get("preferred_rideshare_app", None)
-    return user
+    return FakeUser(**overrides)
+
+
+async def _override_get_db():
+    yield None
 
 
 @pytest.fixture
@@ -37,8 +44,10 @@ def authed_client():
         return mock_user
 
     app.dependency_overrides[get_required_user] = _override
+    app.dependency_overrides[get_db] = _override_get_db
     yield TestClient(app), mock_user
     app.dependency_overrides.pop(get_required_user, None)
+    app.dependency_overrides.pop(get_db, None)
 
 
 class TestGetMe:

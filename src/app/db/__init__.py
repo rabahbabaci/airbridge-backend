@@ -21,7 +21,7 @@ def _make_async_url(url: str) -> str:
 
 if settings.database_url:
     _async_url = _make_async_url(settings.database_url)
-    engine = create_async_engine(_async_url, echo=False)
+    engine = create_async_engine(_async_url, echo=False, pool_recycle=300, pool_pre_ping=True, pool_size=5, max_overflow=10)
     async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 else:
     engine = None

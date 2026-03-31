@@ -173,22 +173,16 @@ async def _fetch_distance_matrix(
         return None
 
 
-def _fetch_traffic_variants(
+async def _fetch_traffic_variants(
     origin: str, destination: str, departure_time: int, primary_minutes: int
 ) -> tuple[int, int]:
     """Return (pessimistic, optimistic) duration in minutes via parallel Distance Matrix calls."""
-    async def _run() -> tuple[int | None, int | None]:
+    try:
         async with httpx.AsyncClient() as client:
-            return await asyncio.gather(
+            pessimistic_min, optimistic_min = await asyncio.gather(
                 _fetch_distance_matrix(client, origin, destination, departure_time, "pessimistic"),
                 _fetch_distance_matrix(client, origin, destination, departure_time, "optimistic"),
             )
-
-    # NOTE: asyncio.run() creates a new event loop. This works because FastAPI runs
-    # sync endpoints in a threadpool. If any endpoint becomes async def, this will
-    # raise RuntimeError — refactor to use await directly in that case.
-    try:
-        pessimistic_min, optimistic_min = asyncio.run(_run())
     except Exception:
         pessimistic_min, optimistic_min = None, None
 
@@ -200,7 +194,7 @@ def _fetch_traffic_variants(
     return pessimistic_min, optimistic_min
 
 
-def get_drive_time(
+async def get_drive_time(
     origin_address: str,
     airport_iata: str,
     airport_name: str | None = None,
@@ -236,8 +230,8 @@ def get_drive_time(
         if departure_time is not None and departure_time > int(time.time()):
             params["departure_time"] = str(departure_time)
 
-        with httpx.Client(timeout=10) as client:
-            response = client.get(url, params=params)
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, params=params)
         response.raise_for_status()
         data = response.json()
 
@@ -292,7 +286,7 @@ def get_drive_time(
         has_departure = departure_time is not None and departure_time > int(time.time())
 
         if has_departure and is_driving:
-            dur_pessimistic, dur_optimistic = _fetch_traffic_variants(
+            dur_pessimistic, dur_optimistic = await _fetch_traffic_variants(
                 origin_address, destination, departure_time, duration_minutes
             )
         elif has_departure and not is_driving:

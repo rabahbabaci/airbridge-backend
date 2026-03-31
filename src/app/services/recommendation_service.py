@@ -71,7 +71,7 @@ def _effective_context(
     return context.model_copy(update={"preferences": new_prefs})
 
 
-def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[SegmentDetail]:
+async def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[SegmentDetail]:
     origin_iata = snapshot.origin_airport_code or ""
     timings = get_airport_timings(origin_iata)
     prefs = context.preferences
@@ -80,7 +80,7 @@ def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> list[Se
     # 1. Transport to airport (travel time)
     approx_leave = snapshot.scheduled_departure - timedelta(hours=3)
     departure_ts = int(approx_leave.timestamp())
-    drive_data = get_drive_time(
+    drive_data = await get_drive_time(
         context.home_address,
         origin_iata,
         transport_mode=prefs.transport_mode.value,
@@ -314,7 +314,7 @@ def _confidence_from_profile(profile: ConfidenceProfile) -> ConfidenceLevel:
     return ConfidenceLevel.medium
 
 
-def _build_response(
+async def _build_response(
     trip_id: str,
     context: TripContext,
     snapshot: FlightSnapshot,
@@ -322,7 +322,7 @@ def _build_response(
     user=None,
 ) -> RecommendationResponse:
     prefs = context.preferences
-    segments = _compute_segments(context, snapshot)
+    segments = await _compute_segments(context, snapshot)
     raw_total = sum(s.duration_minutes for s in segments)
 
     # Additional buffers
@@ -410,7 +410,7 @@ async def compute_recommendation(
         return None
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    return _build_response(str(context.trip_id), context, snapshot, now, user=user)
+    return await _build_response(str(context.trip_id), context, snapshot, now, user=user)
 
 
 async def recompute_recommendation(
@@ -427,7 +427,7 @@ async def recompute_recommendation(
     context = _effective_context(context, payload.preference_overrides)
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
-    response = _build_response(payload.trip_id, context, snapshot, now, user=user)
+    response = await _build_response(payload.trip_id, context, snapshot, now, user=user)
     if payload.reason:
         response.explanation = f"[Recompute: {payload.reason}] " + response.explanation
     return response

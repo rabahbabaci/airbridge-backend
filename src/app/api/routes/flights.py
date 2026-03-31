@@ -31,11 +31,11 @@ def _parse_utc(utc_str: str | None) -> datetime | None:
         return None
 
 
-def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: int | None, cache: dict) -> int:
+async def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: int | None, cache: dict) -> int:
     if origin_iata in cache:
         return cache[origin_iata]
     try:
-        drive_data = get_drive_time(home_address, origin_iata, transport_mode="driving")
+        drive_data = await get_drive_time(home_address, origin_iata, transport_mode="driving")
         drive_min = drive_data.get("duration_minutes", 60)
     except Exception:
         drive_min = 60
@@ -52,7 +52,7 @@ def _estimate_min_journey(home_address: str, origin_iata: str, departure_hour: i
     return total
 
 
-def enrich_flights(flights: list[dict], home_address: str = "") -> list[dict]:
+async def enrich_flights(flights: list[dict], home_address: str = "") -> list[dict]:
     """Add departed/canceled/catchable/time_warning flags to a list of parsed flights."""
     now = datetime.now(tz=timezone.utc)
     drive_cache: dict[str, int] = {}
@@ -144,7 +144,7 @@ def enrich_flights(flights: list[dict], home_address: str = "") -> list[dict]:
                     pass
             if dep_hour is None:
                 dep_hour = dep_utc.hour  # fallback to UTC
-            est = _estimate_min_journey(home_address, origin_iata, dep_hour, drive_cache)
+            est = await _estimate_min_journey(home_address, origin_iata, dep_hour, drive_cache)
 
             if mins_until_boarding < est:
                 flight["departed"] = False
@@ -165,7 +165,7 @@ def enrich_flights(flights: list[dict], home_address: str = "") -> list[dict]:
 
 
 @router.get("/{flight_number}/{date}")
-def get_flights(
+async def get_flights(
     flight_number: str,
     date: str,
     home_address: str = Query(default=""),
@@ -174,7 +174,7 @@ def get_flights(
     if not result:
         raise HTTPException(status_code=404, detail="No flights found for this flight number and date")
 
-    enriched = enrich_flights(result, home_address)
+    enriched = await enrich_flights(result, home_address)
     return {"flights": enriched}
 
 
@@ -233,7 +233,7 @@ def _matches_airline(flight: dict, airline_query: str) -> bool:
 
 
 @router.get("/search")
-def search_flights(
+async def search_flights(
     origin: str = Query(..., min_length=3, max_length=4),
     destination: str = Query(..., min_length=3, max_length=4),
     date: str = Query(..., min_length=10, max_length=10),
@@ -263,5 +263,5 @@ def search_flights(
     if not filtered:
         return {"flights": []}
 
-    enriched = enrich_flights(filtered, home_address)
+    enriched = await enrich_flights(filtered, home_address)
     return {"flights": enriched}
