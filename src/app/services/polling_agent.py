@@ -40,7 +40,7 @@ async def _get_active_trips(session) -> list:
     """Query trips with monitorable statuses, with user relationship loaded."""
     stmt = (
         select(Trip)
-        .where(Trip.trip_status.in_(["created", "active", "en_route"]))
+        .where(Trip.trip_status.in_(["active", "en_route"]))
         .options(selectinload(Trip.user))
     )
     result = await session.execute(stmt)

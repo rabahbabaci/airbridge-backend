@@ -1,4 +1,4 @@
-"""Tests for GET /v1/trips/active and GET /v1/trips/{trip_id}."""
+"""Tests for GET /v1/trips/active, GET /v1/trips/{trip_id}, and POST /v1/trips/{trip_id}/track."""
 
 import uuid
 
@@ -66,3 +66,19 @@ def test_get_trip_not_found(authed_client):
     client, _ = authed_client
     resp = client.get(f"/v1/trips/{uuid.uuid4()}")
     assert resp.status_code == 404
+
+
+def test_track_trip_no_auth_returns_401(client: TestClient):
+    resp = client.post(f"/v1/trips/{uuid.uuid4()}/track")
+    assert resp.status_code == 401
+
+
+def test_track_trip_no_db_returns_tracked(authed_client):
+    client, _ = authed_client
+    trip_id = str(uuid.uuid4())
+    resp = client.post(f"/v1/trips/{trip_id}/track")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "tracked"
+    assert body["trip_id"] == trip_id
+    assert body["trip_count"] == 0

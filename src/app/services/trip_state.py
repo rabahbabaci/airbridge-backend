@@ -1,8 +1,8 @@
-"""Trip status state machine: created → active → en_route → at_airport → at_gate → complete."""
+"""Trip status state machine: draft → created → active → en_route → at_airport → at_gate → complete."""
 
 from datetime import datetime, timezone
 
-STATUS_ORDER = ["created", "active", "en_route", "at_airport", "at_gate", "complete"]
+STATUS_ORDER = ["draft", "created", "active", "en_route", "at_airport", "at_gate", "complete"]
 MONITORABLE_STATUSES = {"active", "en_route"}
 
 
@@ -12,8 +12,12 @@ def get_trip_status(trip_row) -> str:
 
 
 def should_activate(trip_row, now: datetime) -> bool:
-    """Return True if trip is 'created' and departure is within 24 hours."""
-    if get_trip_status(trip_row) != "created":
+    """Return True if trip is 'created' and departure is within 24 hours.
+    Draft trips must be explicitly tracked first — they are NOT auto-activated."""
+    current = get_trip_status(trip_row)
+    if current not in ("created", "active"):
+        return False
+    if current != "created":
         return False
 
     dep_time = _parse_departure_time(trip_row)

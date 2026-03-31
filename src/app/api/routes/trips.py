@@ -1,4 +1,5 @@
 import logging
+import uuid as _uuid
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -31,6 +32,8 @@ async def post_trip(
     Intake a trip in one of two modes:
     - flight_number: known flight number + departure date + home address
     - route_search: airline + route + time window + home address
+
+    Creates a DRAFT trip. Does NOT increment trip_count.
     """
     if not isinstance(payload, (FlightNumberTripRequest, RouteSearchTripRequest)):
         raise UnsupportedModeError(getattr(payload, "input_mode", "unknown"))
@@ -46,12 +49,53 @@ async def post_trip(
             trip_row = (await db.execute(stmt)).scalar_one_or_none()
             if trip_row is not None:
                 trip_row.user_id = user.id
-            user.trip_count = (user.trip_count or 0) + 1
             await db.commit()
         except Exception:
             logger.exception("Failed to link trip %s to user %s", ctx.trip_id, user.id)
 
     return ctx
+
+
+@router.post("/{trip_id}/track")
+async def track_trip(
+    trip_id: str,
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Promote a draft trip to active and increment trip_count."""
+    if db is None:
+        return {"status": "tracked", "trip_id": trip_id, "trip_count": 0}
+
+    try:
+        tid = _uuid.UUID(trip_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    row = await db.get(TripRow, tid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    # Ownership check: allow claiming anonymous drafts
+    if row.user_id is not None and row.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if row.user_id is None:
+        row.user_id = user.id
+
+    current = row.trip_status or row.status or "draft"
+
+    # Idempotent: already tracked
+    if current in ("active", "en_route", "at_airport", "at_gate", "complete"):
+        return {"status": "already_tracked", "trip_id": trip_id}
+
+    # Promote draft or created → active
+    if current in ("draft", "created"):
+        row.status = "active"
+        row.trip_status = "active"
+        user.trip_count = (user.trip_count or 0) + 1
+        await db.commit()
+        return {"status": "tracked", "trip_id": trip_id, "trip_count": user.trip_count}
+
+    raise HTTPException(status_code=400, detail=f"Cannot track trip in status {current}")
 
 
 ACTIVE_STATUSES = ("created", "active", "en_route", "at_airport", "at_gate")
@@ -101,8 +145,6 @@ async def get_trip(
 ):
     if db is None:
         raise HTTPException(status_code=404, detail="Trip not found")
-
-    import uuid as _uuid
 
     try:
         tid = _uuid.UUID(trip_id)

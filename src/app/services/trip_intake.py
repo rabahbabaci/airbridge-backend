@@ -90,7 +90,7 @@ async def process_trip_intake(
                         else None
                     ),
                     preferences_json=json.dumps(payload.preferences.model_dump()),
-                    status="created",
+                    status="draft",
                 )
                 session.add(row)
                 await session.commit()

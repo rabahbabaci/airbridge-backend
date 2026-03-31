@@ -17,7 +17,7 @@ class FakeTrip:
 
 def test_should_activate_within_24h():
     dep = datetime.now(tz=timezone.utc) + timedelta(hours=12)
-    trip = FakeTrip(selected_departure_utc=dep.isoformat())
+    trip = FakeTrip(status="created", trip_status="created", selected_departure_utc=dep.isoformat())
     assert should_activate(trip, datetime.now(tz=timezone.utc)) is True
 
 
@@ -27,8 +27,22 @@ def test_should_not_activate_far_future():
     assert should_activate(trip, datetime.now(tz=timezone.utc)) is False
 
 
+def test_should_not_activate_draft():
+    """A draft trip within 24h should NOT auto-activate."""
+    dep = datetime.now(tz=timezone.utc) + timedelta(hours=12)
+    trip = FakeTrip(status="draft", trip_status="draft", selected_departure_utc=dep.isoformat())
+    assert should_activate(trip, datetime.now(tz=timezone.utc)) is False
+
+
 def test_advance_status_valid():
-    trip = FakeTrip()
+    trip = FakeTrip(status="draft", trip_status="draft")
+    advance_status(trip, "active")
+    assert trip.status == "active"
+    assert trip.trip_status == "active"
+
+
+def test_advance_status_draft_to_active():
+    trip = FakeTrip(status="draft", trip_status="draft")
     advance_status(trip, "active")
     assert trip.status == "active"
     assert trip.trip_status == "active"
