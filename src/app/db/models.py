@@ -9,6 +9,28 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 
+class Airport(Base):
+    __tablename__ = "airports"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    iata_code: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    icao_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    city: Mapped[str | None] = mapped_column(String, nullable=True)
+    country: Mapped[str | None] = mapped_column(String, nullable=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    size_category: Mapped[str] = mapped_column(String, nullable=False)
+    capability_tier: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    has_live_tsa_feed: Mapped[bool] = mapped_column(Boolean, default=False)
+    curb_to_checkin: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checkin_to_security: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    security_to_gate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parking_to_terminal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    transit_to_terminal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -48,7 +70,10 @@ class Trip(Base):
     home_address: Mapped[str] = mapped_column(String, nullable=False)
     selected_departure_utc: Mapped[str | None] = mapped_column(String, nullable=True)
     preferences_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="created")
+    status: Mapped[str] = mapped_column(String, default="created", server_default="created")
+    last_pushed_leave_home_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trip_status: Mapped[str] = mapped_column(String, default="created", server_default="created")
+    push_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="trips")

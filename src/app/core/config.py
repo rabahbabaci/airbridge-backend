@@ -15,6 +15,7 @@ class Settings:
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_key: str = os.getenv("SUPABASE_KEY", "")
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
+    firebase_credentials_json: str = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
     sentry_dsn: str = os.getenv("SENTRY_DSN", "")
 
 
