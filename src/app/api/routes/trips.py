@@ -5,6 +5,8 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
+from pydantic import BaseModel
+
 from app.api.middleware.auth import get_optional_user, get_required_user
 from app.core.errors import UnsupportedModeError
 from app.db import get_db
@@ -15,6 +17,10 @@ from app.schemas.trips import (
     TripContext,
     TripRequest,
 )
+
+
+class UpdateTripRequest(BaseModel):
+    home_address: str | None = None
 from app.services.trip_intake import process_trip_intake
 
 logger = logging.getLogger(__name__)
@@ -135,6 +141,36 @@ async def get_active_trip(
             "preferences_json": row.preferences_json,
         }
     }
+
+
+@router.put("/{trip_id}")
+async def update_trip(
+    trip_id: str,
+    payload: UpdateTripRequest,
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Update mutable fields on a trip."""
+    if db is None:
+        return {"status": "updated", "trip_id": trip_id}
+
+    try:
+        tid = _uuid.UUID(trip_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    row = await db.get(TripRow, tid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    if row.user_id is not None and row.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if payload.home_address is not None:
+        row.home_address = payload.home_address
+
+    await db.commit()
+    return {"status": "updated", "trip_id": trip_id}
 
 
 @router.get("/{trip_id}")

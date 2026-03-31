@@ -82,3 +82,18 @@ def test_track_trip_no_db_returns_tracked(authed_client):
     assert body["status"] == "tracked"
     assert body["trip_id"] == trip_id
     assert body["trip_count"] == 0
+
+
+def test_update_trip_no_auth_returns_401(client: TestClient):
+    resp = client.put(f"/v1/trips/{uuid.uuid4()}", json={"home_address": "456 Oak Ave"})
+    assert resp.status_code == 401
+
+
+def test_update_trip_no_db_returns_200(authed_client):
+    client, _ = authed_client
+    trip_id = str(uuid.uuid4())
+    resp = client.put(f"/v1/trips/{trip_id}", json={"home_address": "456 Oak Ave"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "updated"
+    assert body["trip_id"] == trip_id

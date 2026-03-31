@@ -41,7 +41,18 @@ async def post_recommendation_recompute(
     user: User | None = Depends(get_optional_user),
     db=Depends(get_db),
 ) -> RecommendationResponse:
-    """Recompute recommendation for an existing trip; optionally pass preference_overrides."""
+    """Recompute recommendation for an existing trip; optionally pass preference_overrides or home_address."""
+    # Persist home_address BEFORE recompute so the engine picks it up via get_trip_context()
+    if payload.home_address is not None and db is not None:
+        try:
+            tid = uuid.UUID(payload.trip_id)
+            trip_row = await db.get(TripRow, tid)
+            if trip_row is not None:
+                trip_row.home_address = payload.home_address
+                await db.commit()
+        except Exception:
+            logger.exception("Failed to persist home_address for trip %s", payload.trip_id)
+
     response = await recompute_recommendation(payload, user=user)
     if response is None:
         raise HTTPException(status_code=404, detail="Trip not found")

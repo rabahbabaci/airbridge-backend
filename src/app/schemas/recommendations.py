@@ -34,6 +34,10 @@ class RecommendationRecomputeRequest(BaseModel):
         None,
         description="Optional overrides for transport_mode, confidence_profile, bag_count, etc.",
     )
+    home_address: str | None = Field(
+        None,
+        description="Optional new home address to use for this recompute",
+    )
 
 
 class RecommendationResponse(BaseModel):
