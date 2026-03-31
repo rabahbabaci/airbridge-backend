@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
 from app.services.integrations.airport_cache import load_airport_cache
 from app.services.integrations.firebase import init_firebase
+from app.services.polling_agent import start_polling_agent
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -39,8 +41,15 @@ async def lifespan(app: FastAPI):
         logger.info("No DATABASE_URL configured — running in-memory mode")
     await load_airport_cache()
     init_firebase()
+    polling_task = asyncio.create_task(start_polling_agent())
+    app.state.polling_task = polling_task
     yield
     # Shutdown
+    polling_task.cancel()
+    try:
+        await polling_task
+    except asyncio.CancelledError:
+        pass
     if settings.database_url:
         from app.db import engine
 
