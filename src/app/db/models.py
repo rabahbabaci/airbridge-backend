@@ -70,7 +70,9 @@ class Trip(Base):
     home_address: Mapped[str] = mapped_column(String, nullable=False)
     selected_departure_utc: Mapped[str | None] = mapped_column(String, nullable=True)
     preferences_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="created")
+    status: Mapped[str] = mapped_column(String, default="created", server_default="created")
+    last_pushed_leave_home_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    trip_status: Mapped[str] = mapped_column(String, default="created", server_default="created")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="trips")

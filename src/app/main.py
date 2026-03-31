@@ -6,10 +6,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 
-from app.api.routes import auth, events, flights, health, recommendations, trips, users, version
+from app.api.routes import auth, devices, events, flights, health, recommendations, trips, users, version
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
 from app.services.integrations.airport_cache import load_airport_cache
+from app.services.integrations.firebase import init_firebase
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("No DATABASE_URL configured — running in-memory mode")
     await load_airport_cache()
+    init_firebase()
     yield
     # Shutdown
     if settings.database_url:
@@ -85,3 +87,4 @@ app.include_router(flights.router, prefix="/v1")
 app.include_router(auth.router, prefix="/v1")
 app.include_router(events.router, prefix="/v1/events")
 app.include_router(users.router, prefix="/v1/users")
+app.include_router(devices.router, prefix="/v1/devices")

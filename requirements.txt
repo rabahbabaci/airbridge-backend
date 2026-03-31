@@ -19,5 +19,8 @@ psycopg2-binary
 supabase
 pyjwt
 
+# push notifications
+firebase-admin
+
 # observability
 sentry-sdk[fastapi]
