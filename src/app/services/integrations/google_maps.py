@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from app.core.config import settings
+from app.services.integrations.airport_cache import get_cached_airport
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,16 @@ AIRPORT_DESTINATIONS: dict[str, str] = {
 
 def get_airport_destination(iata_code: str) -> str:
     """Return Google Maps–friendly airport name for IATA code, or '{code} Airport'."""
-    return AIRPORT_DESTINATIONS.get(iata_code.upper() if iata_code else "", f"{iata_code or ''} Airport")
+    code = iata_code.upper() if iata_code else ""
+    # 1. DB cache
+    cached = get_cached_airport(code)
+    if cached:
+        return cached["name"]
+    # 2. Hardcoded dict
+    if code in AIRPORT_DESTINATIONS:
+        return AIRPORT_DESTINATIONS[code]
+    # 3. Generic fallback
+    return f"{iata_code or ''} Airport"
 
 
 # --- Terminal coordinates (static JSON + geocoding fallback) ---
@@ -204,11 +214,11 @@ async def get_drive_time(
 ) -> dict:
     """Get duration and distance from origin to airport via Google Directions API."""
     try:
-        if terminal and (airport_iata or "").upper() in AIRPORT_DESTINATIONS:
-            base_name = AIRPORT_DESTINATIONS[(airport_iata or "").upper()]
+        base_name = get_airport_destination(airport_iata)
+        if terminal and base_name != f"{airport_iata or ''} Airport":
             destination = f"{base_name} Terminal {terminal} departures"
         else:
-            destination = airport_name or get_airport_destination(airport_iata)
+            destination = airport_name or base_name
         url = "https://maps.googleapis.com/maps/api/directions/json"
         mode = "driving"
         params: dict[str, str] = {

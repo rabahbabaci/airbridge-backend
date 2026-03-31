@@ -9,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from app.api.routes import auth, events, flights, health, recommendations, trips, users, version
 from app.core.config import settings
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+from app.services.integrations.airport_cache import load_airport_cache
 
 if settings.sentry_dsn:
     sentry_sdk.init(
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
                 logger.warning("Database connection failed, running in in-memory mode: %s", e)
     else:
         logger.info("No DATABASE_URL configured — running in-memory mode")
+    await load_airport_cache()
     yield
     # Shutdown
     if settings.database_url:
