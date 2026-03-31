@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.db.models import Airport
 from app.services.integrations.airport_defaults import AIRPORT_TIMINGS
 
-OURAIRPORTS_CSV_URL = "https://ourairports.com/data/airports.csv"
+OURAIRPORTS_CSV_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 
 HUB_AIRPORTS = {
     "ATL", "DFW", "DEN", "ORD", "LAX", "JFK", "SFO", "SEA", "MIA", "EWR",
