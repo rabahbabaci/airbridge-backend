@@ -12,6 +12,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.db import get_db
 from app.db.models import User
+from app.services.integrations.apple_auth import verify_apple_identity_token
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ class SocialAuthRequest(BaseModel):
     provider: Literal["apple", "google"]
     id_token: str = Field(..., min_length=1)
     display_name: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
 
 
 # --- Endpoints ---
@@ -140,6 +143,12 @@ async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
 
 @router.post("/social", status_code=200)
 async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
+    if body.provider == "apple":
+        return await _apple_social_auth(body, db)
+    return await _google_social_auth(body, db)
+
+
+async def _google_social_auth(body: SocialAuthRequest, db):
     client = _get_supabase()
     if client is None:
         raise HTTPException(status_code=503, detail="Auth service not configured")
@@ -204,6 +213,84 @@ async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
         trip_count = row.trip_count
         subscription_status = row.subscription_status
         display_name = row.display_name
+
+    token = _generate_jwt(user_id, email=email)
+    tier = _compute_tier(trip_count, subscription_status)
+
+    return {
+        "user_id": user_id,
+        "token": token,
+        "trip_count": trip_count,
+        "tier": tier,
+        "display_name": display_name,
+        "email": email,
+    }
+
+
+async def _apple_social_auth(body: SocialAuthRequest, db):
+    try:
+        claims = verify_apple_identity_token(body.id_token)
+    except Exception:
+        logger.exception("Apple token verification failed")
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    apple_sub = claims.sub
+    email = claims.email
+
+    # Build display name from frontend-supplied name fields (Apple first sign-in only)
+    provider_name = None
+    if body.given_name or body.family_name:
+        parts = [p for p in (body.given_name, body.family_name) if p]
+        provider_name = " ".join(parts) if parts else None
+
+    user_id = None
+    trip_count = 0
+    subscription_status = "none"
+    display_name = provider_name
+
+    if db is not None:
+        row = None
+
+        # 1. Look up by email first (links with existing Google accounts)
+        if email:
+            stmt = select(User).where(User.email == email)
+            row = (await db.execute(stmt)).scalar_one_or_none()
+
+        # 2. Fallback: look up by apple_user_id
+        if row is None:
+            stmt = select(User).where(User.apple_user_id == apple_sub)
+            row = (await db.execute(stmt)).scalar_one_or_none()
+
+        if row is None:
+            # Create new user
+            row = User(
+                email=email,
+                apple_user_id=apple_sub,
+                auth_provider="apple",
+                display_name=provider_name,
+                trip_count=0,
+                subscription_status="none",
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+        else:
+            # Update existing user — set apple_user_id if missing
+            if row.apple_user_id is None:
+                row.apple_user_id = apple_sub
+            if row.auth_provider is None:
+                row.auth_provider = "apple"
+            # Only update display_name if the user doesn't have one yet
+            if row.display_name is None and provider_name:
+                row.display_name = provider_name
+            await db.commit()
+            await db.refresh(row)
+
+        user_id = str(row.id)
+        trip_count = row.trip_count
+        subscription_status = row.subscription_status
+        display_name = row.display_name
+        email = row.email  # Use stored email if token didn't have one
 
     token = _generate_jwt(user_id, email=email)
     tier = _compute_tier(trip_count, subscription_status)

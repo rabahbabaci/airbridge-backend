@@ -2,6 +2,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.services.integrations.apple_auth import AppleTokenClaims
+
 
 def _mock_supabase_social(email="test@example.com"):
     """Return a mock Supabase client whose sign_in_with_id_token succeeds."""
@@ -32,14 +34,17 @@ class TestSocialAuthEndpoint:
         assert "tier" in data
 
     def test_valid_apple_returns_200(self, client: TestClient):
-        mock_client = _mock_supabase_social()
-        with patch("app.api.routes.auth._get_supabase", return_value=mock_client):
+        with patch(
+            "app.api.routes.auth.verify_apple_identity_token",
+            return_value=AppleTokenClaims(sub="apple.123", email="test@example.com"),
+        ):
             resp = client.post(
                 "/v1/auth/social",
                 json={
                     "provider": "apple",
                     "id_token": "valid-token",
-                    "display_name": "Jane Doe",
+                    "given_name": "Jane",
+                    "family_name": "Doe",
                 },
             )
         assert resp.status_code == 200

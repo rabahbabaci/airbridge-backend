@@ -37,6 +37,7 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     phone_number: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    apple_user_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     auth_provider: Mapped[str | None] = mapped_column(String, nullable=True)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     trip_count: Mapped[int] = mapped_column(Integer, default=0)

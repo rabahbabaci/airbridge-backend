@@ -17,7 +17,8 @@ psycopg2-binary
 
 # auth
 supabase
-pyjwt
+pyjwt[crypto]
+cryptography
 
 # push notifications
 firebase-admin
