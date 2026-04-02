@@ -1,8 +1,10 @@
 """Tests for notification helper functions."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from app.services.notifications import is_pro_user, should_notify_leave_by_shift
+from app.services.polling_agent import _get_transport_mode
 
 
 class FakeUser:
@@ -41,3 +43,41 @@ def test_is_pro_user_subscribed():
 def test_is_pro_user_free():
     user = FakeUser(trip_count=5, subscription_status="none")
     assert is_pro_user(user) is False
+
+
+# --- _get_transport_mode tests ---
+
+
+class FakeTrip:
+    def __init__(self, preferences_json=None):
+        self.preferences_json = preferences_json
+
+
+def test_get_transport_mode_rideshare():
+    trip = FakeTrip(json.dumps({"transport_mode": "rideshare"}))
+    assert _get_transport_mode(trip) == "rideshare"
+
+
+def test_get_transport_mode_driving():
+    trip = FakeTrip(json.dumps({"transport_mode": "driving"}))
+    assert _get_transport_mode(trip) == "driving"
+
+
+def test_get_transport_mode_none_prefs():
+    trip = FakeTrip(None)
+    assert _get_transport_mode(trip) is None
+
+
+def test_get_transport_mode_malformed_json():
+    trip = FakeTrip("{not valid json")
+    assert _get_transport_mode(trip) is None
+
+
+def test_get_transport_mode_empty_string():
+    trip = FakeTrip("")
+    assert _get_transport_mode(trip) is None
+
+
+def test_get_transport_mode_no_key():
+    trip = FakeTrip(json.dumps({"bag_count": 2}))
+    assert _get_transport_mode(trip) is None
