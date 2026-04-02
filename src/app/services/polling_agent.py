@@ -1,6 +1,7 @@
 """Background polling agent that monitors active trips and sends push notifications."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -81,6 +82,18 @@ def _get_poll_interval(seconds_to_dep: float | None) -> int:
     return POLL_INTERVALS[-1][1]
 
 
+def _get_transport_mode(trip_row) -> str | None:
+    """Safely extract transport_mode from trip preferences_json."""
+    raw = getattr(trip_row, "preferences_json", None)
+    if not raw:
+        return None
+    try:
+        prefs = json.loads(raw)
+        return prefs.get("transport_mode") if isinstance(prefs, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 async def _process_trip(trip_row, session) -> None:
     """Process a single trip: activate, recompute, notify."""
     now = datetime.now(tz=timezone.utc)
@@ -120,8 +133,12 @@ async def _process_trip(trip_row, session) -> None:
     if should_notify_leave_by_shift(trip_row.last_pushed_leave_home_at, new_leave_at):
         if trip_row.last_pushed_leave_home_at:
             body = f"Your leave-by time changed to {new_leave_at.strftime('%I:%M %p')}"
+            if _get_transport_mode(trip_row) == "rideshare":
+                body += " If you booked a ride, you may want to reschedule."
         else:
             body = f"Leave by {new_leave_at.strftime('%I:%M %p')} to make your flight"
+            if _get_transport_mode(trip_row) == "rideshare":
+                body += " If you booked a ride, schedule your pickup accordingly."
 
         await send_trip_notification(
             user_id=trip_row.user_id,
