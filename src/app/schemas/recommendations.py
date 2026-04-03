@@ -76,3 +76,6 @@ class RecommendationResponse(BaseModel):
     home_coordinates: dict | None = Field(
         None, description="Lat/lng of the user's home address, if available"
     )
+    origin_airport_code: str | None = Field(
+        None, description="Origin airport IATA code"
+    )

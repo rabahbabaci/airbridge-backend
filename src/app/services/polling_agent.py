@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -17,6 +18,7 @@ from app.services.notifications import (
     send_trip_notification,
     should_notify_leave_by_shift,
 )
+from app.services.integrations.airport_defaults import AIRPORT_TIMEZONES
 from app.services.recommendation_service import recompute_recommendation
 from app.services.trip_state import (
     MONITORABLE_STATUSES,
@@ -94,6 +96,15 @@ def _get_transport_mode(trip_row) -> str | None:
         return None
 
 
+def _format_local_time(utc_dt: datetime, airport_iata: str | None) -> str:
+    """Format a UTC datetime as local time string using the airport's timezone."""
+    if airport_iata and airport_iata in AIRPORT_TIMEZONES:
+        local_dt = utc_dt.astimezone(ZoneInfo(AIRPORT_TIMEZONES[airport_iata]))
+    else:
+        local_dt = utc_dt
+    return local_dt.strftime("%I:%M %p").lstrip("0")
+
+
 async def _process_trip(trip_row, session) -> None:
     """Process a single trip: activate, recompute, notify."""
     now = datetime.now(tz=timezone.utc)
@@ -131,12 +142,14 @@ async def _process_trip(trip_row, session) -> None:
 
     # Check for leave-by shift notification
     if should_notify_leave_by_shift(trip_row.last_pushed_leave_home_at, new_leave_at):
+        local_time_str = _format_local_time(new_leave_at, response.origin_airport_code)
+
         if trip_row.last_pushed_leave_home_at:
-            body = f"Your leave-by time changed to {new_leave_at.strftime('%I:%M %p')}"
+            body = f"Your leave-by time changed to {local_time_str}"
             if _get_transport_mode(trip_row) == "rideshare":
                 body += " If you booked a ride, you may want to reschedule."
         else:
-            body = f"Leave by {new_leave_at.strftime('%I:%M %p')} to make your flight"
+            body = f"Leave by {local_time_str} to make your flight"
             if _get_transport_mode(trip_row) == "rideshare":
                 body += " If you booked a ride, schedule your pickup accordingly."
 

@@ -394,6 +394,7 @@ async def _build_response(
         remaining_pro_trips=remaining_pro_trips,
         terminal_coordinates=terminal_coords,
         home_coordinates=home_coords,
+        origin_airport_code=origin_iata,
     )
 
 

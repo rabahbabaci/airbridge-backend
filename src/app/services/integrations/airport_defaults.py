@@ -21,6 +21,25 @@ AIRPORT_TIMINGS: dict[str, dict[str, int]] = {
     "STS": {"curb_to_checkin": 2, "checkin_to_security": 2, "security_to_gate": 5, "parking_to_terminal": 5, "transit_to_terminal": 8},
 }
 
+AIRPORT_TIMEZONES: dict[str, str] = {
+    "SFO": "America/Los_Angeles",
+    "OAK": "America/Los_Angeles",
+    "SJC": "America/Los_Angeles",
+    "LAX": "America/Los_Angeles",
+    "SAN": "America/Los_Angeles",
+    "SNA": "America/Los_Angeles",
+    "STS": "America/Los_Angeles",
+    "SEA": "America/Los_Angeles",
+    "DEN": "America/Denver",
+    "DFW": "America/Chicago",
+    "ORD": "America/Chicago",
+    "ATL": "America/New_York",
+    "JFK": "America/New_York",
+    "EWR": "America/New_York",
+    "BOS": "America/New_York",
+    "MIA": "America/New_York",
+}
+
 DEFAULT_TIMINGS: dict[str, int] = {
     "curb_to_checkin": 5,
     "checkin_to_security": 3,
