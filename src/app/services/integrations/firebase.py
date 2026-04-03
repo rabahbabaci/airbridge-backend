@@ -50,10 +50,6 @@ def send_push(
         return False
 
     try:
-        apns_payload = {"aps": {"interruption-level": ios_interruption_level}}
-        if sound:
-            apns_payload["aps"]["sound"] = sound
-
         message = firebase_admin.messaging.Message(
             notification=firebase_admin.messaging.Notification(title=title, body=body),
             token=token,
@@ -61,9 +57,9 @@ def send_push(
             apns=firebase_admin.messaging.APNSConfig(
                 payload=firebase_admin.messaging.APNSPayload(
                     aps=firebase_admin.messaging.Aps(
-                        interruption_level=ios_interruption_level,
-                        sound=sound,
+                        sound=sound or "default",
                     ),
+                    custom_data={"interruption-level": ios_interruption_level},
                 ),
             ),
             android=firebase_admin.messaging.AndroidConfig(priority="high"),
@@ -102,9 +98,9 @@ def send_push_batch(
                     apns=firebase_admin.messaging.APNSConfig(
                         payload=firebase_admin.messaging.APNSPayload(
                             aps=firebase_admin.messaging.Aps(
-                                interruption_level=ios_interruption_level,
-                                sound=sound,
+                                sound=sound or "default",
                             ),
+                            custom_data={"interruption-level": ios_interruption_level},
                         ),
                     ),
                     android=firebase_admin.messaging.AndroidConfig(priority="high"),
