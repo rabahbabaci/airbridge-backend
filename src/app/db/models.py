@@ -42,6 +42,7 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     trip_count: Mapped[int] = mapped_column(Integer, default=0)
     subscription_status: Mapped[str] = mapped_column(String, default="none")
+    stripe_customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_transport_mode: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_security_access: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_bag_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -75,6 +76,13 @@ class Trip(Base):
     last_pushed_leave_home_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     trip_status: Mapped[str] = mapped_column(String, default="created", server_default="created")
     push_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    morning_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_to_go_push_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    projected_timeline: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    actual_depart_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    feedback_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="trips")
@@ -140,6 +148,21 @@ class Feedback(Base):
 
     trip: Mapped["Trip"] = relationship(back_populates="feedbacks")
     user: Mapped["User"] = relationship(back_populates="feedbacks")
+
+
+class TsaObservation(Base):
+    __tablename__ = "tsa_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    airport_code: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    checkpoint_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_of_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    wait_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    reported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    user: Mapped["User"] = relationship()
 
 
 class Event(Base):

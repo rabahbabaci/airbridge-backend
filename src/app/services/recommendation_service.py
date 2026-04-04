@@ -25,6 +25,7 @@ from app.services.integrations.google_maps import (
     get_drive_time,
     get_terminal_coordinates,
 )
+from app.services.integrations.tsa_api import fetch_live_tsa_wait
 from app.services.integrations.tsa_model import estimate_tsa_wait
 from app.services.trial import get_tier_info
 from app.services.trip_intake import get_trip_context
@@ -248,11 +249,13 @@ async def _compute_segments(context: TripContext, snapshot: FlightSnapshot) -> l
     if departure_hour is None:
         departure_hour = snapshot.scheduled_departure.hour if snapshot.scheduled_departure else 12
     dow = snapshot.scheduled_departure.weekday()  # 0=Monday
+    live_tsa = await fetch_live_tsa_wait(origin_iata) if origin_iata else None
     tsa = estimate_tsa_wait(
         airport_iata=origin_iata,
         departure_hour=departure_hour,
         day_of_week=dow,
         security_access=prefs.security_access.value if hasattr(prefs, "security_access") else "none",
+        live_api_data=live_tsa,
     )
     if prefs.confidence_profile == ConfidenceProfile.safety:
         tsa_wait = tsa["p80"]

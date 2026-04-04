@@ -1,11 +1,21 @@
 """User profile and preferences endpoints."""
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from pydantic import BaseModel
+from sqlalchemy import delete, select
 
 from app.api.middleware.auth import get_required_user
 from app.db import get_db
-from app.db.models import User
+from app.db.models import (
+    DeviceToken,
+    Event,
+    Feedback,
+    Recommendation,
+    Trip,
+    TsaObservation,
+    User,
+)
 from app.services.trial import get_tier_info
 
 router = APIRouter(tags=["users"])
@@ -95,3 +105,34 @@ async def update_preferences(
     await db.commit()
     await db.refresh(user)
     return _build_preferences(user)
+
+
+@router.delete("/me", status_code=204)
+async def delete_account(
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Delete user account and all associated data."""
+    if db is None:
+        return Response(status_code=204)
+
+    # Cascade delete in dependency order
+    await db.execute(delete(Event).where(Event.user_id == user.id))
+    await db.execute(delete(DeviceToken).where(DeviceToken.user_id == user.id))
+    await db.execute(delete(TsaObservation).where(TsaObservation.user_id == user.id))
+    await db.execute(delete(Feedback).where(Feedback.user_id == user.id))
+
+    # Get user's trip IDs for recommendation cascade
+    trip_ids = (
+        await db.execute(select(Trip.id).where(Trip.user_id == user.id))
+    ).scalars().all()
+
+    if trip_ids:
+        await db.execute(delete(Recommendation).where(Recommendation.trip_id.in_(trip_ids)))
+        await db.execute(delete(Feedback).where(Feedback.trip_id.in_(trip_ids)))
+
+    await db.execute(delete(Trip).where(Trip.user_id == user.id))
+    await db.delete(user)
+    await db.commit()
+
+    return Response(status_code=204)

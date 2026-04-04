@@ -17,6 +17,16 @@ class Settings:
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
     firebase_credentials_json: str = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
     sentry_dsn: str = os.getenv("SENTRY_DSN", "")
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    stripe_price_monthly: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
+    stripe_price_annual: str = os.getenv("STRIPE_PRICE_ANNUAL", "")
+    tsa_wait_times_api_key: str = os.getenv("TSA_WAIT_TIMES_API_KEY", "")
+    sendgrid_api_key: str = os.getenv("SENDGRID_API_KEY", "")
+    from_email: str = os.getenv("FROM_EMAIL", "noreply@airbridge.com")
+    twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
 
 
 settings = Settings()
