@@ -26,5 +26,8 @@ firebase-admin
 # payments
 stripe
 
+# email
+sendgrid
+
 # observability
 sentry-sdk[fastapi]

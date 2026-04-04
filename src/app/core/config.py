@@ -22,6 +22,8 @@ class Settings:
     stripe_price_monthly: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
     stripe_price_annual: str = os.getenv("STRIPE_PRICE_ANNUAL", "")
     tsa_wait_times_api_key: str = os.getenv("TSA_WAIT_TIMES_API_KEY", "")
+    sendgrid_api_key: str = os.getenv("SENDGRID_API_KEY", "")
+    from_email: str = os.getenv("FROM_EMAIL", "noreply@airbridge.com")
 
 
 settings = Settings()

@@ -140,6 +140,36 @@ async def _process_trip(trip_row, session) -> None:
 
     new_leave_at = response.leave_home_at
 
+    # Morning email: 6 hours before departure, if not already sent
+    secs = _seconds_to_departure(trip_row)
+    if (
+        secs is not None
+        and secs <= 6 * 3600
+        and getattr(trip_row, "morning_email_sent_at", None) is None
+        and user
+        and user.email
+    ):
+        from app.services.notifications.email_service import send_morning_briefing
+
+        segments = []
+        if response.segments:
+            segments = [
+                {"label": s.label, "duration_minutes": s.duration_minutes}
+                for s in response.segments
+            ]
+        trip_data = {
+            "flight_number": trip_row.flight_number,
+            "departure_date": trip_row.departure_date,
+            "leave_by_time": _format_local_time(new_leave_at, response.origin_airport_code),
+            "segments": segments,
+        }
+        if send_morning_briefing(user.email, trip_data):
+            trip_row.morning_email_sent_at = datetime.now(tz=timezone.utc)
+            try:
+                await session.commit()
+            except Exception:
+                logger.exception("Failed to update morning_email_sent_at for trip %s", trip_row.id)
+
     # Check for leave-by shift notification
     if should_notify_leave_by_shift(trip_row.last_pushed_leave_home_at, new_leave_at):
         local_time_str = _format_local_time(new_leave_at, response.origin_airport_code)
