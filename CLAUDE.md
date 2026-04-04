@@ -32,7 +32,7 @@ PYTHONPATH=src alembic upgrade head                         # migrations
 
 ## Database
 
-PostgreSQL on Supabase. Alembic migrations (currently at `0008_add_apple_user_id`). RLS enabled on all public tables. Models: Airport, User, Trip, Recommendation, DeviceToken, Feedback, Event.
+PostgreSQL on Supabase. Alembic migrations (currently at `0010_feedback_tracking_columns`). RLS enabled on all public tables. Models: Airport, User, Trip, Recommendation, DeviceToken, Feedback, Event, TsaObservation.
 
 ```bash
 pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql   # before every production migration
@@ -46,14 +46,20 @@ Railway auto-deploys from `main`. After merge, run `PYTHONPATH=src alembic upgra
 
 Required: `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `JWT_SECRET`, `RAPIDAPI_KEY`, `GOOGLE_MAPS_API_KEY`
 Optional: `SENTRY_DSN`, `FIREBASE_CREDENTIALS_JSON` (base64-encoded service account)
+Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_ANNUAL`
+Email: `SENDGRID_API_KEY`, `FROM_EMAIL`
+SMS: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`
+TSA API: `TSA_WAIT_TIMES_API_KEY`
 
 ## API Endpoints
 
 | Group | Route file | Endpoints |
 |-------|-----------|-----------|
 | Auth | `auth.py` | POST send-otp, verify-otp, social (Apple/Google) |
-| Users | `users.py` | GET /me, PUT /preferences |
-| Trips | `trips.py` | POST create, POST track, GET active, GET by id, PUT update |
+| Users | `users.py` | GET /me, PUT /preferences, DELETE /me (account deletion) |
+| Trips | `trips.py` | POST create, POST track, GET active, GET by id, PUT update, GET history |
+| Subscriptions | `subscriptions.py` | POST checkout, POST webhook, GET status, POST portal |
+| Feedback | `feedback.py` | POST feedback (with TSA observation collection) |
 | Recommendations | `recommendations.py` | POST compute, POST recompute (with preference overrides) |
 | Flights | `flights.py` | GET lookup by number/date, GET route search |
 | Devices | `devices.py` | POST register, DELETE unregister (FCM push tokens) |
@@ -68,9 +74,9 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 |---------|---------|
 | `recommendation_service.py` | Segment timeline engine — computes leave-home time from flight, traffic, TSA, walking |
 | `polling_agent.py` | Background loop monitoring active trips, triggers recompute + push notifications |
-| `notifications.py` | Push notification triggers (leave-by shift, time-to-go) |
+| `notifications/` | Push (FCM), email (SendGrid), SMS (Twilio) notification channels |
 | `trip_intake.py` | Validate + persist trip input (flight_number / route_search modes) |
-| `trip_state.py` | Trip status FSM (created → active → en_route → completed) |
+| `trip_state.py` | Trip status FSM (created → active → en_route → at_airport → at_gate → complete) |
 | `trial.py` | 3-trip free tier logic |
 | `flight_snapshot_service.py` | Build flight snapshot from AeroDataBox or fallback |
 
@@ -80,7 +86,8 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 |-------------|------|---------|
 | AeroDataBox | `aerodatabox.py` | Live flight data (via RapidAPI) |
 | Google Maps | `google_maps.py` | Drive/transit time, geocoding, terminal coordinates |
-| TSA model | `tsa_model.py` | Security wait estimates by airport/hour/day |
+| TSA model | `tsa_model.py` | Three-layer blended TSA estimates (static + API + user feedback) |
+| TSA API | `tsa_api.py` | TSAWaitTimes.com live data with 15-min cache |
 | Airport graph | `airport_graph.py` | Terminal-aware walking times (graph-based) |
 | Airport defaults | `airport_defaults.py` | Flat walking-time defaults + airport timezone mapping |
 | Airport cache | `airport_cache.py` | In-memory DB airport cache at startup |
@@ -89,11 +96,17 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 
 ## Key Patterns
 
-- **Draft-then-track**: POST /trips creates draft, POST /trips/{id}/track promotes to active
+- **Draft-then-track**: POST /trips creates draft, POST /trips/{id}/track promotes to active + computes projected_timeline
 - **Dual persistence**: In-memory FIFO (max 1000) + PostgreSQL. DB is primary
 - **Confidence profiles**: safety (0.92), sweet (0.85), risk (0.70)
 - **Preference overrides**: `_effective_context()` merges overrides into trip context for recompute
 - **Notification timezone**: Polling agent converts UTC leave-home times to local using airport timezone
+- **Multi-channel notifications**: FCM push (existing) + SendGrid email (morning briefing) + Twilio SMS (time-to-go escalation, Pro only)
+- **Smart passive tracking**: Time-based state advancement using projected_timeline milestones + interaction signals from events table. No location permissions required.
+- **Phase-aware polling**: active=full recompute, en_route=cancellation/gate only, at_airport/at_gate=minimal, complete=stop
+- **TSA blending**: Static baselines (weight 0.3-1.0) + live API (0.5) + user feedback observations (0.2). Weights redistribute when layers unavailable.
+- **Subscription model**: Stripe checkout/webhook/portal. Trial = first 3 trips free. Pro = subscription_status="active"
+- **Data flywheel**: Post-trip feedback collects actual TSA wait times → TsaObservation → feeds back into TSA blending model
 
 ## Coding Conventions
 
