@@ -91,3 +91,20 @@ class TestUpdatePreferences:
             json={"transport_mode": "driving"},
         )
         assert resp.status_code == 200
+
+
+class TestDeleteAccount:
+    def test_no_auth_returns_401(self, client: TestClient):
+        resp = client.delete("/v1/users/me")
+        assert resp.status_code == 401
+
+    def test_returns_204_with_auth(self, authed_client):
+        client, _ = authed_client
+        resp = client.delete("/v1/users/me")
+        assert resp.status_code == 204
+
+    def test_response_has_no_body(self, authed_client):
+        client, _ = authed_client
+        resp = client.delete("/v1/users/me")
+        assert resp.status_code == 204
+        assert resp.content == b""
