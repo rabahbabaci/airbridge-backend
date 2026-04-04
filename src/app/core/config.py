@@ -17,6 +17,10 @@ class Settings:
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
     firebase_credentials_json: str = os.getenv("FIREBASE_CREDENTIALS_JSON", "")
     sentry_dsn: str = os.getenv("SENTRY_DSN", "")
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    stripe_price_monthly: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
+    stripe_price_annual: str = os.getenv("STRIPE_PRICE_ANNUAL", "")
 
 
 settings = Settings()

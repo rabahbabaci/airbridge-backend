@@ -42,6 +42,7 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     trip_count: Mapped[int] = mapped_column(Integer, default=0)
     subscription_status: Mapped[str] = mapped_column(String, default="none")
+    stripe_customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_transport_mode: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_security_access: Mapped[str | None] = mapped_column(String, nullable=True)
     preferred_bag_count: Mapped[int | None] = mapped_column(Integer, nullable=True)

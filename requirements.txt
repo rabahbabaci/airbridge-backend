@@ -23,5 +23,8 @@ cryptography
 # push notifications
 firebase-admin
 
+# payments
+stripe
+
 # observability
 sentry-sdk[fastapi]
