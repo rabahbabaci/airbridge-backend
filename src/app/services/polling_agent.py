@@ -203,7 +203,7 @@ async def _process_trip(trip_row, session) -> None:
         or trip_row.last_pushed_leave_home_at < new_leave_at
         or get_trip_status(trip_row) == "active"
     ):
-        await send_trip_notification(
+        sent = await send_trip_notification(
             user_id=trip_row.user_id,
             notification_type=TIME_TO_GO,
             title="Time to go!",
@@ -211,6 +211,49 @@ async def _process_trip(trip_row, session) -> None:
             trip_row=trip_row,
             session=session,
         )
+        if sent and getattr(trip_row, "time_to_go_push_sent_at", None) is None:
+            trip_row.time_to_go_push_sent_at = now
+            try:
+                await session.commit()
+            except Exception:
+                logger.exception("Failed to update time_to_go_push_sent_at for trip %s", trip_row.id)
+
+    # SMS escalation: 5 min after TIME_TO_GO push, if no user interaction
+    time_to_go_sent = getattr(trip_row, "time_to_go_push_sent_at", None)
+    sms_count = getattr(trip_row, "sms_count", 0) or 0
+    if (
+        time_to_go_sent is not None
+        and (now - time_to_go_sent).total_seconds() >= 300
+        and is_pro_user(user)
+        and user
+        and user.phone_number
+        and sms_count < 3
+    ):
+        from app.db.models import Event
+        from app.services.notifications.sms_service import send_sms
+
+        tap_stmt = (
+            select(Event)
+            .where(
+                Event.user_id == user.id,
+                Event.event_name == "timetogo_tap",
+                Event.created_at >= time_to_go_sent,
+            )
+            .limit(1)
+        )
+        tap = (await session.execute(tap_stmt)).scalar_one_or_none()
+
+        if tap is None:
+            flight = trip_row.flight_number or "your flight"
+            if send_sms(
+                user.phone_number,
+                f"AirBridge: It's time to leave for your {flight} flight!",
+            ):
+                trip_row.sms_count = sms_count + 1
+                try:
+                    await session.commit()
+                except Exception:
+                    logger.exception("Failed to update sms_count for trip %s", trip_row.id)
 
 
 async def polling_loop() -> None:

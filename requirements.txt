@@ -29,5 +29,8 @@ stripe
 # email
 sendgrid
 
+# sms
+twilio
+
 # observability
 sentry-sdk[fastapi]

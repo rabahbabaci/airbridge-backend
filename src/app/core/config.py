@@ -24,6 +24,9 @@ class Settings:
     tsa_wait_times_api_key: str = os.getenv("TSA_WAIT_TIMES_API_KEY", "")
     sendgrid_api_key: str = os.getenv("SENDGRID_API_KEY", "")
     from_email: str = os.getenv("FROM_EMAIL", "noreply@airbridge.com")
+    twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
 
 
 settings = Settings()

@@ -77,6 +77,8 @@ class Trip(Base):
     trip_status: Mapped[str] = mapped_column(String, default="created", server_default="created")
     push_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     morning_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    time_to_go_push_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sms_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="trips")
