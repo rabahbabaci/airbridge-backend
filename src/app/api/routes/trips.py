@@ -143,6 +143,80 @@ async def get_active_trip(
     }
 
 
+@router.get("/history")
+async def get_trip_history(
+    limit: int = 10,
+    offset: int = 0,
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Return completed trips with optional feedback data."""
+    if db is None:
+        return {"trips": [], "total": 0, "avg_accuracy_minutes": None, "total_trips_with_feedback": 0}
+
+    from app.services.trial import is_pro
+    from app.db.models import Feedback
+    from sqlalchemy import func
+    from sqlalchemy.orm import selectinload
+
+    # Pro gating: free tier max 5 trips total
+    max_results = limit if is_pro(user) else min(limit, 5)
+
+    # Count total completed trips
+    count_stmt = (
+        select(func.count(TripRow.id))
+        .where(TripRow.user_id == user.id, TripRow.trip_status == "complete")
+    )
+    total = (await db.execute(count_stmt)).scalar() or 0
+
+    # Fetch trips with feedback
+    stmt = (
+        select(TripRow)
+        .where(TripRow.user_id == user.id, TripRow.trip_status == "complete")
+        .options(selectinload(TripRow.feedbacks))
+        .order_by(TripRow.created_at.desc())
+        .offset(offset)
+        .limit(max_results)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    trips = []
+    for row in rows:
+        fb = row.feedbacks[0] if row.feedbacks else None
+        trips.append({
+            "trip_id": str(row.id),
+            "flight_number": row.flight_number,
+            "departure_date": row.departure_date,
+            "home_address": row.home_address,
+            "status": row.trip_status,
+            "feedback": {
+                "followed_recommendation": fb.followed_recommendation,
+                "minutes_at_gate": fb.minutes_at_gate,
+                "actual_tsa_wait_minutes": fb.actual_tsa_wait_minutes,
+            } if fb else None,
+        })
+
+    # Aggregate accuracy stats
+    agg_stmt = select(
+        func.count(Feedback.id),
+        func.avg(Feedback.minutes_at_gate),
+    ).where(
+        Feedback.user_id == user.id,
+        Feedback.minutes_at_gate.is_not(None),
+    )
+    agg = (await db.execute(agg_stmt)).one()
+    total_with_feedback = agg[0] or 0
+    avg_gate = agg[1]
+    avg_accuracy = round(abs(float(avg_gate) - 30), 1) if avg_gate is not None else None
+
+    return {
+        "trips": trips,
+        "total": total,
+        "avg_accuracy_minutes": avg_accuracy,
+        "total_trips_with_feedback": total_with_feedback,
+    }
+
+
 @router.put("/{trip_id}")
 async def update_trip(
     trip_id: str,
