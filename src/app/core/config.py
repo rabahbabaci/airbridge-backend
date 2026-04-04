@@ -21,6 +21,7 @@ class Settings:
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     stripe_price_monthly: str = os.getenv("STRIPE_PRICE_MONTHLY", "")
     stripe_price_annual: str = os.getenv("STRIPE_PRICE_ANNUAL", "")
+    tsa_wait_times_api_key: str = os.getenv("TSA_WAIT_TIMES_API_KEY", "")
 
 
 settings = Settings()
