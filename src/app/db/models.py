@@ -79,6 +79,10 @@ class Trip(Base):
     morning_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     time_to_go_push_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sms_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    projected_timeline: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    actual_depart_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_completed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    feedback_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     user: Mapped["User | None"] = relationship(back_populates="trips")

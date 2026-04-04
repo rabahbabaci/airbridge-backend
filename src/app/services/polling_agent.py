@@ -9,10 +9,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.db.models import Trip, User
+from datetime import timedelta
+
+from app.db.models import Event, Trip, User
 from app.schemas.recommendations import RecommendationRecomputeRequest
 from app.services.notifications import (
     LEAVE_BY_SHIFT,
+    POST_TRIP,
     TIME_TO_GO,
     is_pro_user,
     send_trip_notification,
@@ -43,7 +46,7 @@ async def _get_active_trips(session) -> list:
     """Query trips with monitorable statuses, with user relationship loaded."""
     stmt = (
         select(Trip)
-        .where(Trip.trip_status.in_(["active", "en_route"]))
+        .where(Trip.trip_status.in_(list(MONITORABLE_STATUSES)))
         .options(selectinload(Trip.user))
     )
     result = await session.execute(stmt)
@@ -105,8 +108,161 @@ def _format_local_time(utc_dt: datetime, airport_iata: str | None) -> str:
     return local_dt.strftime("%I:%M %p").lstrip("0")
 
 
+INTERACTION_SIGNALS = {"timetogo_tap", "rideshare_tap", "nav_tap"}
+
+
+def _get_departure_utc(trip_row) -> datetime | None:
+    """Parse departure UTC from projected_timeline or selected_departure_utc."""
+    timeline = getattr(trip_row, "projected_timeline", None)
+    if timeline and isinstance(timeline, dict) and "departure_utc" in timeline:
+        try:
+            dt = datetime.fromisoformat(timeline["departure_utc"].replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError, AttributeError):
+            pass
+    # Fallback to selected_departure_utc
+    if trip_row.selected_departure_utc:
+        try:
+            dt = datetime.fromisoformat(
+                str(trip_row.selected_departure_utc).replace("Z", "+00:00")
+            )
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _get_timeline_dt(trip_row, key: str) -> datetime | None:
+    """Parse a datetime from the projected_timeline JSONB."""
+    timeline = getattr(trip_row, "projected_timeline", None)
+    if not timeline or not isinstance(timeline, dict):
+        return None
+    val = timeline.get(key)
+    if not val:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(val).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+async def _check_interaction_signals(trip_row, user_id, session, since: datetime) -> datetime | None:
+    """Check events table for interaction signals since a given time. Returns event timestamp or None."""
+    stmt = (
+        select(Event)
+        .where(
+            Event.user_id == user_id,
+            Event.event_name.in_(INTERACTION_SIGNALS),
+            Event.created_at >= since,
+        )
+        .order_by(Event.created_at.desc())
+        .limit(1)
+    )
+    event = (await session.execute(stmt)).scalar_one_or_none()
+    if event:
+        return event.created_at
+    return None
+
+
+async def _advance_trip_state(trip_row, session, now: datetime) -> None:
+    """Advance trip state based on time triggers and interaction signals."""
+    current = get_trip_status(trip_row)
+    user = trip_row.user
+    dep_utc = _get_departure_utc(trip_row)
+
+    # Force close: departure + 24h
+    if dep_utc and now >= dep_utc + timedelta(hours=24):
+        if current != "complete":
+            advance_status(trip_row, "complete")
+            trip_row.auto_completed = True
+            await session.commit()
+            logger.info("Trip %s force-closed at departure+24h", trip_row.id)
+        return
+
+    if current == "active":
+        leave_home_at = _get_timeline_dt(trip_row, "leave_home_at")
+        # Time-based: now >= leave_home_at
+        if leave_home_at and now >= leave_home_at:
+            advance_status(trip_row, "en_route")
+            await session.commit()
+            logger.info("Trip %s advanced to en_route (time-based)", trip_row.id)
+            return
+        # Interaction signal: tap within last 10 min
+        if user:
+            signal_ts = await _check_interaction_signals(
+                trip_row, user.id, session, now - timedelta(minutes=10)
+            )
+            if signal_ts:
+                advance_status(trip_row, "en_route")
+                trip_row.actual_depart_at = signal_ts
+                await session.commit()
+                logger.info("Trip %s advanced to en_route (interaction signal)", trip_row.id)
+                return
+
+    elif current == "en_route":
+        arrive_at = _get_timeline_dt(trip_row, "arrive_airport_at")
+        if arrive_at and now >= arrive_at:
+            advance_status(trip_row, "at_airport")
+            await session.commit()
+            logger.info("Trip %s advanced to at_airport", trip_row.id)
+            return
+
+    elif current == "at_airport":
+        clear_security = _get_timeline_dt(trip_row, "clear_security_at")
+        if clear_security and now >= clear_security:
+            advance_status(trip_row, "at_gate")
+            await session.commit()
+            logger.info("Trip %s advanced to at_gate", trip_row.id)
+            return
+
+    elif current == "at_gate":
+        if dep_utc and now >= dep_utc + timedelta(minutes=30):
+            advance_status(trip_row, "complete")
+            trip_row.auto_completed = True
+            await session.commit()
+            logger.info("Trip %s auto-completed at departure+30min", trip_row.id)
+            return
+
+
+async def _handle_feedback_request(trip_row, session, now: datetime) -> None:
+    """Send feedback request push after trip completion."""
+    if get_trip_status(trip_row) != "complete":
+        return
+    if not trip_row.user_id:
+        return
+
+    dep_utc = _get_departure_utc(trip_row)
+    if not dep_utc:
+        return
+
+    feedback_requested = getattr(trip_row, "feedback_requested_at", None)
+
+    # First request: departure + 30 min
+    if feedback_requested is None and now >= dep_utc + timedelta(minutes=30):
+        await send_trip_notification(
+            user_id=trip_row.user_id,
+            notification_type=POST_TRIP,
+            title="How'd it go?",
+            body="Tell us about your trip to help improve future predictions",
+            trip_row=trip_row,
+            session=session,
+        )
+        trip_row.feedback_requested_at = now
+        try:
+            await session.commit()
+        except Exception:
+            logger.exception("Failed to set feedback_requested_at for trip %s", trip_row.id)
+
+
 async def _process_trip(trip_row, session) -> None:
-    """Process a single trip: activate, recompute, notify."""
+    """Process a single trip: activate, advance state, recompute, notify."""
     now = datetime.now(tz=timezone.utc)
 
     # Activate if within 24 hours
@@ -119,7 +275,7 @@ async def _process_trip(trip_row, session) -> None:
             logger.exception("Failed to activate trip %s", trip_row.id)
             return
 
-    # Only monitor active/en_route trips
+    # Only monitor monitorable trips
     if get_trip_status(trip_row) not in MONITORABLE_STATUSES:
         return
 
@@ -127,6 +283,23 @@ async def _process_trip(trip_row, session) -> None:
     user = trip_row.user
     if not is_pro_user(user):
         return
+
+    # Advance state based on timeline + interaction signals
+    await _advance_trip_state(trip_row, session, now)
+
+    current = get_trip_status(trip_row)
+
+    # Handle feedback request for completed trips
+    if current == "complete":
+        await _handle_feedback_request(trip_row, session, now)
+        return
+
+    # Phase-aware behavior: only recompute + full notify for active phase
+    if current != "active":
+        # en_route, at_airport, at_gate: minimal polling, no recompute
+        return
+
+    # === Active phase: full recompute + notifications ===
 
     # Recompute recommendation
     try:
@@ -140,6 +313,14 @@ async def _process_trip(trip_row, session) -> None:
 
     new_leave_at = response.leave_home_at
 
+    # Update projected_timeline from recommendation segments
+    if response.segments:
+        _update_projected_timeline(trip_row, response)
+        try:
+            await session.commit()
+        except Exception:
+            logger.exception("Failed to update projected_timeline for trip %s", trip_row.id)
+
     # Morning email: 6 hours before departure, if not already sent
     secs = _seconds_to_departure(trip_row)
     if (
@@ -151,12 +332,10 @@ async def _process_trip(trip_row, session) -> None:
     ):
         from app.services.notifications.email_service import send_morning_briefing
 
-        segments = []
-        if response.segments:
-            segments = [
-                {"label": s.label, "duration_minutes": s.duration_minutes}
-                for s in response.segments
-            ]
+        segments = [
+            {"label": s.label, "duration_minutes": s.duration_minutes}
+            for s in response.segments
+        ]
         trip_data = {
             "flight_number": trip_row.flight_number,
             "departure_date": trip_row.departure_date,
@@ -229,7 +408,6 @@ async def _process_trip(trip_row, session) -> None:
         and user.phone_number
         and sms_count < 3
     ):
-        from app.db.models import Event
         from app.services.notifications.sms_service import send_sms
 
         tap_stmt = (
@@ -254,6 +432,43 @@ async def _process_trip(trip_row, session) -> None:
                     await session.commit()
                 except Exception:
                     logger.exception("Failed to update sms_count for trip %s", trip_row.id)
+
+
+def _update_projected_timeline(trip_row, response) -> None:
+    """Rebuild projected_timeline JSONB from recommendation response segments."""
+    now = datetime.now(tz=timezone.utc)
+    leave_at = response.leave_home_at
+
+    # Walk through segments to compute milestone timestamps
+    cursor = leave_at
+    arrive_airport_at = None
+    clear_security_at = None
+    at_gate_at = None
+
+    for seg in response.segments:
+        dur = timedelta(minutes=seg.duration_minutes)
+        seg_end = cursor + dur
+
+        seg_id = seg.id.lower() if seg.id else ""
+        if "transport" in seg_id or "drive" in seg_id or "parking" in seg_id or "transit" in seg_id:
+            arrive_airport_at = seg_end
+        elif "tsa" in seg_id or "security" in seg_id:
+            clear_security_at = seg_end
+        elif "gate" in seg_id:
+            at_gate_at = seg_end
+
+        cursor = seg_end
+
+    dep_utc = _get_departure_utc(trip_row)
+
+    trip_row.projected_timeline = {
+        "leave_home_at": leave_at.isoformat(),
+        "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
+        "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
+        "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
+        "departure_utc": dep_utc.isoformat() if dep_utc else None,
+        "computed_at": now.isoformat(),
+    }
 
 
 async def polling_loop() -> None:

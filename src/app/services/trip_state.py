@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 STATUS_ORDER = ["draft", "created", "active", "en_route", "at_airport", "at_gate", "complete"]
-MONITORABLE_STATUSES = {"active", "en_route"}
+MONITORABLE_STATUSES = {"active", "en_route", "at_airport", "at_gate"}
 
 
 def get_trip_status(trip_row) -> str:

@@ -98,6 +98,44 @@ async def track_trip(
         row.status = "active"
         row.trip_status = "active"
         user.trip_count = (user.trip_count or 0) + 1
+
+        # Compute initial projected_timeline
+        try:
+            from app.schemas.recommendations import RecommendationRequest
+            from app.services.recommendation_service import compute_recommendation
+
+            rec_response = await compute_recommendation(
+                RecommendationRequest(trip_id=trip_id), user=user
+            )
+            if rec_response and rec_response.segments:
+                from datetime import timedelta
+                cursor = rec_response.leave_home_at
+                arrive_airport_at = None
+                clear_security_at = None
+                at_gate_at = None
+                for seg in rec_response.segments:
+                    seg_end = cursor + timedelta(minutes=seg.duration_minutes)
+                    seg_id = seg.id.lower() if seg.id else ""
+                    if any(k in seg_id for k in ("transport", "drive", "parking", "transit")):
+                        arrive_airport_at = seg_end
+                    elif "tsa" in seg_id or "security" in seg_id:
+                        clear_security_at = seg_end
+                    elif "gate" in seg_id:
+                        at_gate_at = seg_end
+                    cursor = seg_end
+
+                dep_utc = row.selected_departure_utc
+                row.projected_timeline = {
+                    "leave_home_at": rec_response.leave_home_at.isoformat(),
+                    "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
+                    "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
+                    "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
+                    "departure_utc": dep_utc,
+                    "computed_at": date.today().isoformat(),
+                }
+        except Exception:
+            logger.warning("Failed to compute projected_timeline on track for trip %s", trip_id)
+
         await db.commit()
         return {"status": "tracked", "trip_id": trip_id, "trip_count": user.trip_count}
 
