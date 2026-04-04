@@ -146,6 +146,21 @@ class Feedback(Base):
     user: Mapped["User"] = relationship(back_populates="feedbacks")
 
 
+class TsaObservation(Base):
+    __tablename__ = "tsa_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    airport_code: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    checkpoint_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_of_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    wait_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    reported_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+
+    user: Mapped["User"] = relationship()
+
+
 class Event(Base):
     __tablename__ = "events"
 
