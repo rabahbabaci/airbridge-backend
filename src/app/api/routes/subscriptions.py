@@ -97,7 +97,7 @@ async def stripe_webhook(request: Request):
 
     async with async_session_factory() as session:
         if event_type == "checkout.session.completed":
-            customer_id = data.get("customer")
+            customer_id = getattr(data, "customer", None)
             if customer_id:
                 stmt = select(User).where(User.stripe_customer_id == customer_id)
                 user = (await session.execute(stmt)).scalar_one_or_none()
@@ -107,7 +107,7 @@ async def stripe_webhook(request: Request):
                     logger.info("User %s subscription activated via checkout", user.id)
 
         elif event_type == "customer.subscription.deleted":
-            customer_id = data.get("customer")
+            customer_id = getattr(data, "customer", None)
             if customer_id:
                 stmt = select(User).where(User.stripe_customer_id == customer_id)
                 user = (await session.execute(stmt)).scalar_one_or_none()
@@ -117,7 +117,7 @@ async def stripe_webhook(request: Request):
                     logger.info("User %s subscription cancelled", user.id)
 
         elif event_type == "invoice.payment_failed":
-            customer_id = data.get("customer")
+            customer_id = getattr(data, "customer", None)
             if customer_id:
                 stmt = select(User).where(User.stripe_customer_id == customer_id)
                 user = (await session.execute(stmt)).scalar_one_or_none()
