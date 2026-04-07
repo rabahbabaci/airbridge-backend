@@ -1,9 +1,10 @@
 """Tests for Stripe subscription endpoints."""
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import stripe
 from fastapi.testclient import TestClient
 
 from app.api.middleware.auth import get_required_user
@@ -175,6 +176,60 @@ class TestWebhook:
             headers={"stripe-signature": "sig"},
         )
         assert resp.status_code == 503
+
+    @pytest.mark.parametrize(
+        "event_type,expected_status",
+        [
+            ("checkout.session.completed", "active"),
+            ("customer.subscription.deleted", "cancelled"),
+            ("invoice.payment_failed", "past_due"),
+        ],
+    )
+    @patch("app.api.routes.subscriptions.settings")
+    @patch("app.api.routes.subscriptions.stripe")
+    def test_webhook_real_stripe_object_updates_user(
+        self, mock_stripe, mock_settings, event_type, expected_status
+    ):
+        """Regression: Stripe SDK v15 StripeObject does not inherit from dict.
+
+        Earlier code called data.get("customer") which raised
+        AttributeError because .get is not an attribute. This test
+        constructs a real StripeObject (not a dict) so the handler
+        exercises the actual prod code path.
+        """
+        mock_settings.stripe_webhook_secret = "whsec_test"
+        event_obj = stripe.StripeObject.construct_from(
+            {
+                "type": event_type,
+                "data": {"object": {"customer": "cus_test_123"}},
+            },
+            "sk_test",
+        )
+        mock_stripe.Webhook.construct_event.return_value = event_obj
+
+        fake_user = FakeUser(stripe_customer_id="cus_test_123")
+
+        exec_result = MagicMock()
+        exec_result.scalar_one_or_none = MagicMock(return_value=fake_user)
+        fake_session = MagicMock()
+        fake_session.execute = AsyncMock(return_value=exec_result)
+        fake_session.commit = AsyncMock()
+        fake_cm = MagicMock()
+        fake_cm.__aenter__ = AsyncMock(return_value=fake_session)
+        fake_cm.__aexit__ = AsyncMock(return_value=None)
+        fake_factory = MagicMock(return_value=fake_cm)
+
+        with patch("app.db.async_session_factory", fake_factory):
+            client = TestClient(app)
+            resp = client.post(
+                "/v1/subscriptions/webhook",
+                content=b"{}",
+                headers={"stripe-signature": "valid"},
+            )
+
+        assert resp.status_code == 200
+        assert fake_user.subscription_status == expected_status
+        fake_session.commit.assert_awaited()
 
 
 class TestSubscriptionStatus:
