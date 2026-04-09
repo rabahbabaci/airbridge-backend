@@ -204,6 +204,61 @@ async def track_trip(
     raise HTTPException(status_code=400, detail=f"Cannot track trip in status {current}")
 
 
+UNTRACKABLE_STATUSES = ("active", "en_route", "at_airport", "at_gate")
+
+
+@router.post("/{trip_id}/untrack")
+async def untrack_trip(
+    trip_id: str,
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Untrack a trip: reset to draft, clear phase fields, decrement trip_count."""
+    if db is None:
+        return {"status": "untracked", "trip_id": trip_id, "trip_count": 0}
+
+    try:
+        tid = _uuid.UUID(trip_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    row = await db.get(TripRow, tid)
+    if row is None or (row.user_id is not None and row.user_id != user.id):
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    current = row.trip_status or row.status or "draft"
+    if current not in UNTRACKABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot untrack trip in status '{current}'. Only active, en_route, at_airport, and at_gate trips can be untracked.",
+        )
+
+    # Reset to draft
+    row.status = "draft"
+    row.trip_status = "draft"
+
+    # Clear phase fields
+    row.projected_timeline = None
+    row.last_pushed_leave_home_at = None
+    row.push_count = 0
+    row.morning_email_sent_at = None
+    row.time_to_go_push_sent_at = None
+    row.sms_count = 0
+    row.actual_depart_at = None
+    row.auto_completed = False
+    row.feedback_requested_at = None
+
+    # Decrement trip_count with floor of 0
+    user.trip_count = max((user.trip_count or 0) - 1, 0)
+
+    await db.commit()
+    return {
+        "status": "untracked",
+        "trip_id": trip_id,
+        "trip_count": user.trip_count,
+    }
+
+
 ACTIVE_STATUSES = ("created", "active", "en_route", "at_airport", "at_gate")
 
 
