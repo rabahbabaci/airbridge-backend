@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -10,6 +11,10 @@ from sqlalchemy.pool import StaticPool
 
 # Ensure src/ is on the path so `app` is importable without installation
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+# Disable Sentry before any app imports so sentry_sdk.init() is skipped.
+# This prevents test error-path tests from spamming the production Sentry dashboard.
+os.environ.setdefault("PYTEST_CURRENT_TEST", "conftest")
 
 from app.db import Base, get_db  # noqa: E402
 from app.db import models as _models  # noqa: E402, F401 — register all models with Base.metadata

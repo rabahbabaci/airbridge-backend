@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import sentry_sdk
@@ -14,7 +15,7 @@ from app.services.integrations.airport_cache import load_airport_cache
 from app.services.integrations.firebase import init_firebase
 from app.services.polling_agent import start_polling_agent
 
-if settings.sentry_dsn:
+if settings.sentry_dsn and "PYTEST_CURRENT_TEST" not in os.environ:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         traces_sample_rate=0.1,
