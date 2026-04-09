@@ -173,7 +173,6 @@ async def track_trip(
             logger.exception("Failed to compute projected_timeline on track for trip %s", trip_id)
 
         # Populate flight route columns for history enrichment
-        # TODO(sprint7): add real-DB test for flight column populate once async SQLite fixtures land (Task 4)
         if row.input_mode == "flight_number" and row.flight_number:
             try:
                 from app.services.flight_snapshot_service import get_available_flights
