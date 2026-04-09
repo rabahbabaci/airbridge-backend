@@ -22,6 +22,11 @@ from app.services.trip_intake import process_trip_intake
 
 class UpdateTripRequest(BaseModel):
     home_address: str | None = None
+    flight_number: str | None = None
+    departure_date: str | None = None
+    transport_mode: str | None = None
+    security_access: str | None = None
+    buffer_preference: int | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +368,7 @@ async def update_trip(
     user: User = Depends(get_required_user),
     db=Depends(get_db),
 ):
-    """Update mutable fields on a trip."""
+    """Update mutable fields on a trip. Draft/active only."""
     if db is None:
         return {"status": "updated", "trip_id": trip_id}
 
@@ -373,14 +378,56 @@ async def update_trip(
         raise HTTPException(status_code=404, detail="Trip not found")
 
     row = await db.get(TripRow, tid)
-    if row is None:
+    if row is None or (row.user_id is not None and row.user_id != user.id):
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    if row.user_id is not None and row.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    current = row.trip_status or row.status or "draft"
+    if current not in ("draft", "active"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot edit trip in status '{current}'. Only draft and active trips can be edited.",
+        )
 
+    # Apply field updates
     if payload.home_address is not None:
         row.home_address = payload.home_address
+    if payload.flight_number is not None:
+        row.flight_number = payload.flight_number.strip().upper()
+    if payload.departure_date is not None:
+        row.departure_date = payload.departure_date
+
+    # Preference-level updates (stored in preferences_json)
+    import json as _json
+
+    prefs_changed = False
+    prefs = _json.loads(row.preferences_json) if row.preferences_json else {}
+    if payload.transport_mode is not None:
+        prefs["transport_mode"] = payload.transport_mode
+        prefs_changed = True
+    if payload.security_access is not None:
+        prefs["security_access"] = payload.security_access
+        prefs_changed = True
+    if payload.buffer_preference is not None:
+        prefs["gate_time_minutes"] = payload.buffer_preference
+        prefs_changed = True
+    if prefs_changed:
+        row.preferences_json = _json.dumps(prefs)
+
+    # Recompute recommendation for active trips
+    if current == "active":
+        await db.flush()  # ensure get_trip_context sees updated fields
+        try:
+            from app.schemas.recommendations import RecommendationRequest
+            from app.services.recommendation_service import compute_recommendation
+
+            rec_response = await compute_recommendation(
+                RecommendationRequest(trip_id=trip_id), user=user
+            )
+            timeline = _build_projected_timeline(rec_response, row.selected_departure_utc)
+            if timeline:
+                row.projected_timeline = timeline
+        except Exception:
+            logger.exception("Failed to recompute on update for trip %s", trip_id)
 
     await db.commit()
     return {"status": "updated", "trip_id": trip_id}
