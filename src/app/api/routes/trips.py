@@ -238,6 +238,46 @@ async def get_active_trip(
     }
 
 
+NON_COMPLETE_STATUSES = ("draft", "created", "active", "en_route", "at_airport", "at_gate")
+
+
+@router.get("/active-list")
+async def get_active_list(
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Return all non-completed trips for the current user."""
+    if db is None:
+        return {"trips": []}
+
+    stmt = (
+        select(TripRow)
+        .where(
+            TripRow.user_id == user.id,
+            TripRow.trip_status.in_(NON_COMPLETE_STATUSES),
+        )
+        .order_by(TripRow.departure_date.asc(), TripRow.created_at.desc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    return {
+        "trips": [
+            {
+                "trip_id": str(row.id),
+                "flight_number": row.flight_number,
+                "airline": row.airline,
+                "origin_iata": row.origin_iata,
+                "destination_iata": row.destination_iata,
+                "departure_date": row.departure_date,
+                "status": row.trip_status or row.status,
+                "projected_timeline": row.projected_timeline,
+                "home_address": row.home_address,
+            }
+            for row in rows
+        ]
+    }
+
+
 @router.get("/history")
 async def get_trip_history(
     limit: int = 10,
