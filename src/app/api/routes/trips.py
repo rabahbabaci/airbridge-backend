@@ -1,6 +1,6 @@
 import logging
 import uuid as _uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -17,15 +17,74 @@ from app.schemas.trips import (
     TripContext,
     TripRequest,
 )
+from app.services.trip_intake import process_trip_intake
 
 
 class UpdateTripRequest(BaseModel):
     home_address: str | None = None
-from app.services.trip_intake import process_trip_intake
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trips", tags=["trips"])
+
+
+def _build_projected_timeline(rec_response, dep_utc: str | None) -> dict | None:
+    """Build projected_timeline dict from recommendation response segments.
+
+    Used by track_trip, update_trip, and polling_agent.
+    """
+    if not rec_response or not rec_response.segments:
+        return None
+
+    cursor = rec_response.leave_home_at
+    arrive_airport_at = None
+    clear_security_at = None
+    at_gate_at = None
+
+    for seg in rec_response.segments:
+        seg_end = cursor + timedelta(minutes=seg.duration_minutes)
+        seg_id = seg.id.lower() if seg.id else ""
+        if any(k in seg_id for k in ("transport", "drive", "parking", "transit")):
+            arrive_airport_at = seg_end
+        elif "tsa" in seg_id or "security" in seg_id:
+            clear_security_at = seg_end
+        elif "gate" in seg_id:
+            at_gate_at = seg_end
+        cursor = seg_end
+
+    return {
+        "leave_home_at": rec_response.leave_home_at.isoformat(),
+        "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
+        "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
+        "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
+        "departure_utc": dep_utc,
+        "computed_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+
+def _compute_accuracy_delta(row, feedback) -> int | None:
+    """Compute accuracy_delta = actual_gate_wait - predicted_gate_buffer.
+
+    Positive = arrived earlier than predicted (more gate time than expected).
+    Negative = arrived later than predicted (less gate time than expected).
+    Returns None when data is missing.
+    """
+    if feedback is None or feedback.minutes_at_gate is None:
+        return None
+    timeline = row.projected_timeline
+    if not timeline:
+        return None
+    at_gate_at = timeline.get("at_gate_at")
+    departure_utc = timeline.get("departure_utc")
+    if not at_gate_at or not departure_utc:
+        return None
+    try:
+        gate_dt = datetime.fromisoformat(str(at_gate_at).replace("Z", "+00:00"))
+        dep_dt = datetime.fromisoformat(str(departure_utc).replace("Z", "+00:00"))
+        predicted_gate_buffer = (dep_dt - gate_dt).total_seconds() / 60
+        return round(feedback.minutes_at_gate - predicted_gate_buffer)
+    except (ValueError, TypeError):
+        return None
 
 
 @router.post("", response_model=TripContext, status_code=201)
@@ -107,34 +166,32 @@ async def track_trip(
             rec_response = await compute_recommendation(
                 RecommendationRequest(trip_id=trip_id), user=user
             )
-            if rec_response and rec_response.segments:
-                from datetime import timedelta
-                cursor = rec_response.leave_home_at
-                arrive_airport_at = None
-                clear_security_at = None
-                at_gate_at = None
-                for seg in rec_response.segments:
-                    seg_end = cursor + timedelta(minutes=seg.duration_minutes)
-                    seg_id = seg.id.lower() if seg.id else ""
-                    if any(k in seg_id for k in ("transport", "drive", "parking", "transit")):
-                        arrive_airport_at = seg_end
-                    elif "tsa" in seg_id or "security" in seg_id:
-                        clear_security_at = seg_end
-                    elif "gate" in seg_id:
-                        at_gate_at = seg_end
-                    cursor = seg_end
-
-                dep_utc = row.selected_departure_utc
-                row.projected_timeline = {
-                    "leave_home_at": rec_response.leave_home_at.isoformat(),
-                    "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
-                    "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
-                    "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
-                    "departure_utc": dep_utc,
-                    "computed_at": date.today().isoformat(),
-                }
+            timeline = _build_projected_timeline(rec_response, row.selected_departure_utc)
+            if timeline:
+                row.projected_timeline = timeline
         except Exception:
-            logger.warning("Failed to compute projected_timeline on track for trip %s", trip_id)
+            logger.exception("Failed to compute projected_timeline on track for trip %s", trip_id)
+
+        # Populate flight route columns for history enrichment
+        if row.input_mode == "flight_number" and row.flight_number:
+            try:
+                from app.services.flight_snapshot_service import get_available_flights
+
+                flights = get_available_flights(row.flight_number, row.departure_date)
+                if flights:
+                    selected_utc = (row.selected_departure_utc or "").strip()
+                    if selected_utc:
+                        flight = next(
+                            (f for f in flights if (f.get("departure_time_utc") or "").strip() == selected_utc),
+                            flights[0],
+                        )
+                    else:
+                        flight = flights[0]
+                    row.origin_iata = flight.get("origin_iata")
+                    row.destination_iata = flight.get("destination_iata")
+                    row.airline = flight.get("airline_name")
+            except Exception:
+                logger.exception("Failed to populate flight route for trip %s", trip_id)
 
         await db.commit()
         return {"status": "tracked", "trip_id": trip_id, "trip_count": user.trip_count}
@@ -227,6 +284,10 @@ async def get_trip_history(
             "departure_date": row.departure_date,
             "home_address": row.home_address,
             "status": row.trip_status,
+            "origin_iata": row.origin_iata,
+            "destination_iata": row.destination_iata,
+            "airline": row.airline,
+            "accuracy_delta_minutes": _compute_accuracy_delta(row, fb),
             "feedback": {
                 "followed_recommendation": fb.followed_recommendation,
                 "minutes_at_gate": fb.minutes_at_gate,

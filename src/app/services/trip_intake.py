@@ -73,13 +73,26 @@ async def process_trip_intake(
             from app.db.models import Trip as TripRow
 
             async with async_session_factory() as session:
+                is_flight_number = isinstance(payload, FlightNumberTripRequest)
                 row = TripRow(
                     id=trip_id,
                     input_mode=payload.input_mode,
                     flight_number=(
                         payload.flight_number
-                        if isinstance(payload, FlightNumberTripRequest)
+                        if is_flight_number
                         else None
+                    ),
+                    origin_iata=(
+                        None if is_flight_number
+                        else payload.origin_airport
+                    ),
+                    destination_iata=(
+                        None if is_flight_number
+                        else payload.destination_airport
+                    ),
+                    airline=(
+                        None if is_flight_number
+                        else payload.airline
                     ),
                     departure_date=str(payload.departure_date),
                     home_address=payload.home_address,

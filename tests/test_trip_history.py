@@ -1,11 +1,13 @@
 """Tests for GET /v1/trips/history endpoint."""
 
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.middleware.auth import get_required_user
+from app.api.routes.trips import _build_projected_timeline, _compute_accuracy_delta
 from app.db import get_db
 from app.main import app
 
@@ -122,3 +124,132 @@ class TestProGating:
         limit = 20
         max_results = limit if is_pro(trial_user) else min(limit, 5)
         assert max_results == 20
+
+
+class TestAccuracyDelta:
+    """Unit tests for _compute_accuracy_delta helper."""
+
+    def test_positive_delta_arrived_early(self):
+        """User waited longer at gate than predicted = arrived early."""
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=45)
+        # predicted buffer = 30 min, actual = 45 → delta = +15
+        assert _compute_accuracy_delta(row, fb) == 15
+
+    def test_negative_delta_arrived_late(self):
+        """User waited less at gate than predicted = arrived late."""
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=20)
+        # predicted buffer = 30 min, actual = 20 → delta = -10
+        assert _compute_accuracy_delta(row, fb) == -10
+
+    def test_zero_delta_exact_prediction(self):
+        """User waited exactly as predicted."""
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=30)
+        assert _compute_accuracy_delta(row, fb) == 0
+
+    def test_returns_none_no_feedback(self):
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        assert _compute_accuracy_delta(row, None) is None
+
+    def test_returns_none_no_minutes_at_gate(self):
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=None)
+        assert _compute_accuracy_delta(row, fb) is None
+
+    def test_returns_none_no_timeline(self):
+        row = SimpleNamespace(projected_timeline=None)
+        fb = SimpleNamespace(minutes_at_gate=30)
+        assert _compute_accuracy_delta(row, fb) is None
+
+    def test_returns_none_missing_at_gate_at(self):
+        row = SimpleNamespace(projected_timeline={
+            "departure_utc": "2026-03-08T12:00:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=30)
+        assert _compute_accuracy_delta(row, fb) is None
+
+    def test_returns_none_missing_departure_utc(self):
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00+00:00",
+        })
+        fb = SimpleNamespace(minutes_at_gate=30)
+        assert _compute_accuracy_delta(row, fb) is None
+
+    def test_handles_z_suffix_timestamps(self):
+        """Timestamps with Z suffix (no +00:00) should parse correctly."""
+        row = SimpleNamespace(projected_timeline={
+            "at_gate_at": "2026-03-08T11:30:00Z",
+            "departure_utc": "2026-03-08T12:00:00Z",
+        })
+        fb = SimpleNamespace(minutes_at_gate=40)
+        assert _compute_accuracy_delta(row, fb) == 10
+
+
+class TestBuildProjectedTimeline:
+    """Unit tests for _build_projected_timeline helper."""
+
+    def test_returns_none_when_no_response(self):
+        assert _build_projected_timeline(None, "2026-03-08T12:00:00Z") is None
+
+    def test_returns_none_when_no_segments(self):
+        response = SimpleNamespace(leave_home_at=None, segments=[])
+        assert _build_projected_timeline(response, "2026-03-08T12:00:00Z") is None
+
+    def test_extracts_milestones_from_segments(self):
+        from datetime import datetime, timezone
+
+        leave_at = datetime(2026, 3, 8, 10, 0, 0, tzinfo=timezone.utc)
+        segments = [
+            SimpleNamespace(id="transport_drive", duration_minutes=30),
+            SimpleNamespace(id="tsa_security", duration_minutes=20),
+            SimpleNamespace(id="gate_walk", duration_minutes=10),
+        ]
+        response = SimpleNamespace(leave_home_at=leave_at, segments=segments)
+        dep_utc = "2026-03-08T12:00:00+00:00"
+
+        result = _build_projected_timeline(response, dep_utc)
+
+        assert result is not None
+        assert result["leave_home_at"] == leave_at.isoformat()
+        assert result["departure_utc"] == dep_utc
+        # transport ends at 10:30
+        assert "10:30:00" in result["arrive_airport_at"]
+        # security ends at 10:50
+        assert "10:50:00" in result["clear_security_at"]
+        # gate ends at 11:00
+        assert "11:00:00" in result["at_gate_at"]
+        assert result["computed_at"] is not None
+
+    def test_handles_missing_segment_types(self):
+        from datetime import datetime, timezone
+
+        leave_at = datetime(2026, 3, 8, 10, 0, 0, tzinfo=timezone.utc)
+        segments = [
+            SimpleNamespace(id="unknown_segment", duration_minutes=30),
+        ]
+        response = SimpleNamespace(leave_home_at=leave_at, segments=segments)
+
+        result = _build_projected_timeline(response, None)
+
+        assert result is not None
+        assert result["arrive_airport_at"] is None
+        assert result["clear_security_at"] is None
+        assert result["at_gate_at"] is None
+        assert result["departure_utc"] is None
