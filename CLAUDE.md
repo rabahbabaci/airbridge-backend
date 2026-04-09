@@ -8,7 +8,7 @@ AirBridge — door-to-gate departure decision engine. Computes personalized leav
 
 ```bash
 PYTHONPATH=src uvicorn app.main:app --reload --port 8000   # dev server
-PYTHONPATH=src pytest tests/ -v                             # all tests (140)
+PYTHONPATH=src pytest tests/ -v                             # all tests (244)
 PYTHONPATH=src pytest tests/test_trips.py::TestFlightNumberMode::test_returns_201 -v  # single test
 pip install -r requirements.txt                             # deps
 PYTHONPATH=src alembic upgrade head                         # migrations
@@ -32,7 +32,7 @@ PYTHONPATH=src alembic upgrade head                         # migrations
 
 ## Database
 
-PostgreSQL on Supabase. Alembic migrations (currently at `0010_feedback_tracking_columns`). RLS enabled on all public tables. Models: Airport, User, Trip, Recommendation, DeviceToken, Feedback, Event, TsaObservation.
+PostgreSQL on Supabase. Alembic migrations (currently at `0011_sprint7_trip_flight_columns`). RLS enabled on all public tables. Models: Airport, User, Trip, Recommendation, DeviceToken, Feedback, Event, TsaObservation.
 
 ```bash
 pg_dump $DATABASE_URL > backup_$(date +%Y%m%d).sql   # before every production migration
@@ -57,7 +57,7 @@ TSA API: `TSA_WAIT_TIMES_API_KEY`
 |-------|-----------|-----------|
 | Auth | `auth.py` | POST send-otp, verify-otp, social (Apple/Google) |
 | Users | `users.py` | GET /me, PUT /preferences, DELETE /me (account deletion) |
-| Trips | `trips.py` | POST create, POST track, GET active, GET by id, PUT update, GET history |
+| Trips | `trips.py` | POST create, POST track, POST untrack, GET active, GET active-list, GET by id, PUT update, GET history |
 | Subscriptions | `subscriptions.py` | POST checkout, POST webhook, GET status, POST portal |
 | Feedback | `feedback.py` | POST feedback (with TSA observation collection) |
 | Recommendations | `recommendations.py` | POST compute, POST recompute (with preference overrides) |
@@ -76,7 +76,7 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 | `polling_agent.py` | Background loop monitoring active trips, triggers recompute + push notifications |
 | `notifications/` | Push (FCM), email (SendGrid), SMS (Twilio) notification channels |
 | `trip_intake.py` | Validate + persist trip input (flight_number / route_search modes) |
-| `trip_state.py` | Trip status FSM (created → active → en_route → at_airport → at_gate → complete) |
+| `trip_state.py` | Trip status FSM (draft → created → active → en_route → at_airport → at_gate → complete) |
 | `trial.py` | 3-trip free tier logic |
 | `flight_snapshot_service.py` | Build flight snapshot from AeroDataBox or fallback |
 
@@ -114,3 +114,24 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 - All tests must pass before every commit
 - One task per prompt
 - Read files before editing
+
+## Sprint 7 Context (April 2026)
+
+### Schema Changes
+- Trip model now stores `origin_iata`, `destination_iata`, `airline` (migration 0011). Populated during track (flight_number mode, from AeroDataBox) or intake (route_search mode, from request payload). **Historical pre-migration trips return null — frontend must handle null gracefully in History tab.**
+
+### Trip Status: `created`
+- Valid state between `draft` and `active` in the FSM. Auto-activated by polling agent when departure is within 24 hours. Included in active-list and active queries. Trips created via the API start as `draft`; `created` exists for legacy/direct-insert compatibility.
+
+### New/Modified Endpoints
+- **GET /v1/trips/active-list**: Returns all non-completed trips (draft, created, active, en_route, at_airport, at_gate). Ordered by departure_date ASC.
+- **PUT /v1/trips/{id}** (expanded): Editable fields: flight_number, departure_date, home_address, transport_mode, security_access, buffer_preference. Trip must be in `draft` or `active` status — returns 409 for locked states (en_route, at_airport, at_gate, complete). Active trips trigger recommendation recompute + projected_timeline update.
+- **POST /v1/trips/{id}/untrack**: Resets tracked trip to draft. Clears projected_timeline and all 9 phase/notification fields. Decrements `user.trip_count` with floor of 0 (fairness contract — users aren't punished for fixing mistakes). Allowed for active, en_route, at_airport, at_gate. Returns 409 for draft or complete.
+- **GET /v1/subscriptions/status**: Now includes `current_period_end` (Unix timestamp from Stripe API). Null for trial users or on Stripe error.
+- **GET /v1/trips/history**: Row shape enriched with `origin_iata`, `destination_iata`, `airline`, `accuracy_delta_minutes` (actual gate wait minus predicted gate buffer; positive = early, negative = late, null if no feedback/timeline).
+
+### Ownership Pattern
+- New/modified trip endpoints use 404 (not 403) for other users' trips — don't leak trip existence.
+
+### Testing Principle (Sprint 7 rule)
+- **No over-mocking.** Tests must exercise real code paths with realistic fixtures. The Sprint 6 Stripe webhook bug passed tests because `async_session_factory` was mocked to None, short-circuiting the buggy code path. Sprint 7 adds async SQLite test DB (`aiosqlite`) for real query testing. `db=None` tests are thin smoke only — they do not count as business logic coverage.
