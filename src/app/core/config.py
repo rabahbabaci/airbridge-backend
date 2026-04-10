@@ -12,6 +12,7 @@ class Settings:
     rapidapi_key: str = os.getenv("RAPIDAPI_KEY", "")
     google_maps_api_key: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
     database_url: str = os.getenv("DATABASE_URL", "")
+    enable_polling_agent: bool = os.getenv("ENABLE_POLLING_AGENT", "true").lower() in ("true", "1", "yes")
     supabase_url: str = os.getenv("SUPABASE_URL", "")
     supabase_key: str = os.getenv("SUPABASE_KEY", "")
     jwt_secret: str = os.getenv("JWT_SECRET", "dev-secret-change-me")
