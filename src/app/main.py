@@ -42,15 +42,17 @@ async def lifespan(app: FastAPI):
         logger.info("No DATABASE_URL configured — running in-memory mode")
     await load_airport_cache()
     init_firebase()
-    polling_task = asyncio.create_task(start_polling_agent())
-    app.state.polling_task = polling_task
+    if settings.enable_polling_agent:
+        polling_task = asyncio.create_task(start_polling_agent())
+        app.state.polling_task = polling_task
     yield
     # Shutdown
-    polling_task.cancel()
-    try:
-        await polling_task
-    except asyncio.CancelledError:
-        pass
+    if hasattr(app.state, "polling_task"):
+        app.state.polling_task.cancel()
+        try:
+            await app.state.polling_task
+        except asyncio.CancelledError:
+            pass
     if settings.database_url:
         from app.db import engine
 
