@@ -16,12 +16,12 @@ VALID_PLATFORMS = ("ios", "android", "web")
 
 
 class RegisterDeviceRequest(BaseModel):
-    token: str = Field(..., min_length=1)
+    token: str = Field(..., min_length=1, max_length=500)
     platform: Literal["ios", "android", "web"]
 
 
 class UnregisterDeviceRequest(BaseModel):
-    token: str = Field(..., min_length=1)
+    token: str = Field(..., min_length=1, max_length=500)
 
 
 @router.post("/register", status_code=200)

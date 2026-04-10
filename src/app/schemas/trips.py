@@ -135,13 +135,14 @@ def _normalize_iata(v: str) -> str:
 
 class FlightNumberTripRequest(BaseModel):
     input_mode: Literal["flight_number"]
-    flight_number: str = Field(..., description="Flight number, e.g. AA123")
+    flight_number: str = Field(..., max_length=10, description="Flight number, e.g. AA123")
     departure_date: date = Field(
         ..., description="Scheduled departure date (YYYY-MM-DD)"
     )
-    home_address: str = Field(..., min_length=1, description="Full home/origin address")
+    home_address: str = Field(..., min_length=1, max_length=500, description="Full home/origin address")
     selected_departure_utc: str | None = Field(
         None,
+        max_length=50,
         description="UTC departure time of the user's selected flight, e.g. '2026-03-08 20:16Z'",
     )
     preferences: TripPreferences = Field(default_factory=TripPreferences)
@@ -160,7 +161,7 @@ class FlightNumberTripRequest(BaseModel):
 class RouteSearchTripRequest(BaseModel):
     input_mode: Literal["route_search"]
     airline: str = Field(
-        ..., description="Airline name or IATA code, e.g. AA or American Airlines"
+        ..., max_length=100, description="Airline name or IATA code, e.g. AA or American Airlines"
     )
     origin_airport: str = Field(
         ...,
@@ -180,7 +181,7 @@ class RouteSearchTripRequest(BaseModel):
     departure_time_window: DepartureTimeWindow = Field(
         ..., description="Preferred departure time window"
     )
-    home_address: str = Field(..., min_length=1, description="Full home/origin address")
+    home_address: str = Field(..., min_length=1, max_length=500, description="Full home/origin address")
     preferences: TripPreferences = Field(default_factory=TripPreferences)
 
     @field_validator("origin_airport", "destination_airport", mode="before")

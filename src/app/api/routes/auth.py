@@ -52,20 +52,20 @@ def _compute_tier(trip_count: int, subscription_status: str) -> str:
 
 
 class SendOtpRequest(BaseModel):
-    phone_number: str = Field(..., min_length=1)
+    phone_number: str = Field(..., min_length=1, max_length=20, pattern=r"^\+?[1-9]\d{1,14}$")
 
 
 class VerifyOtpRequest(BaseModel):
-    phone_number: str = Field(..., min_length=1)
-    code: str = Field(..., min_length=1)
+    phone_number: str = Field(..., min_length=1, max_length=20, pattern=r"^\+?[1-9]\d{1,14}$")
+    code: str = Field(..., min_length=1, max_length=10, pattern=r"^\d{4,8}$")
 
 
 class SocialAuthRequest(BaseModel):
     provider: Literal["apple", "google"]
-    id_token: str = Field(..., min_length=1)
-    display_name: str | None = None
-    given_name: str | None = None
-    family_name: str | None = None
+    id_token: str = Field(..., min_length=1, max_length=4000)
+    display_name: str | None = Field(None, max_length=100)
+    given_name: str | None = Field(None, max_length=50)
+    family_name: str | None = Field(None, max_length=50)
 
 
 # --- Endpoints ---

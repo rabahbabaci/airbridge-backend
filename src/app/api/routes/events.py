@@ -1,7 +1,7 @@
 """Analytics event ingestion endpoint."""
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.middleware.auth import get_optional_user
 from app.db import get_db
@@ -11,8 +11,18 @@ router = APIRouter(tags=["events"])
 
 
 class EventRequest(BaseModel):
-    event_name: str
+    event_name: str = Field(..., max_length=100)
     metadata: dict | None = None
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def limit_metadata_size(cls, v):
+        """Reject metadata payloads larger than 10KB to prevent abuse."""
+        if v is not None:
+            import json
+            if len(json.dumps(v)) > 10_000:
+                raise ValueError("metadata payload exceeds 10KB limit")
+        return v
 
 
 @router.post("", status_code=200)

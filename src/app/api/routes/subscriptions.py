@@ -5,7 +5,9 @@ import logging
 import stripe
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from app.api.middleware.auth import get_required_user
 from app.core.config import settings
@@ -18,9 +20,9 @@ router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
 
 class CheckoutRequest(BaseModel):
-    price_type: str  # "monthly" or "annual"
-    success_url: str
-    cancel_url: str
+    price_type: Literal["monthly", "annual"]
+    success_url: str = Field(..., max_length=2000)
+    cancel_url: str = Field(..., max_length=2000)
 
 
 @router.post("/checkout")

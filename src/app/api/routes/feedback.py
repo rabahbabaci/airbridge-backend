@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.api.middleware.auth import get_required_user
@@ -21,10 +21,10 @@ router = APIRouter(prefix="/feedback", tags=["feedback"])
 
 
 class FeedbackRequest(BaseModel):
-    trip_id: str
+    trip_id: str = Field(..., max_length=50)
     followed_recommendation: bool | None = None
-    minutes_at_gate: int | None = None
-    actual_tsa_wait_minutes: int | None = None
+    minutes_at_gate: int | None = Field(None, ge=0, le=300)
+    actual_tsa_wait_minutes: int | None = Field(None, ge=0, le=180)
 
 
 @router.post("")
