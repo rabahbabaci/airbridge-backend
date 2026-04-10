@@ -69,7 +69,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # SECURITY: Must be restricted to specific origins before public launch
+    allow_origins=[
+        "https://airbridge.live",       # Production web
+        "capacitor://localhost",         # Native iOS app (Capacitor)
+        "http://localhost:5173",         # Vite dev server
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
