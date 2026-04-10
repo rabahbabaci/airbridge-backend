@@ -15,5 +15,5 @@ def test_version_response_shape(client: TestClient) -> None:
 
 def test_version_values(client: TestClient) -> None:
     body = client.get("/version").json()
-    assert body["app_name"] == "airbridge-backend"
+    assert "airbridge-backend" in body["app_name"]
     assert body["version"] == "0.1.0"

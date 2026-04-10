@@ -4,17 +4,41 @@ import sys
 import uuid
 from pathlib import Path
 
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Test environment isolation — MUST run before any app imports
+# ---------------------------------------------------------------------------
 
 # Ensure src/ is on the path so `app` is importable without installation
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# Load test environment BEFORE any app imports
+test_env_path = Path(__file__).parent.parent / ".env.test"
+if not test_env_path.exists():
+    raise RuntimeError(
+        f"REFUSING TO RUN TESTS — {test_env_path} not found. "
+        "Tests require .env.test to prevent accidental production DB access."
+    )
+load_dotenv(test_env_path, override=True)
+
+# Seatbelt: verify we're not pointing at production
+db_url = os.environ.get("DATABASE_URL", "")
+FORBIDDEN_HOSTS = ["supabase.co", "supabase.com", "pooler.supabase.com", "railway.app"]
+for forbidden in FORBIDDEN_HOSTS:
+    if forbidden in db_url:
+        raise RuntimeError(
+            f"REFUSING TO RUN TESTS — DATABASE_URL contains '{forbidden}'. "
+            "Tests must use a local test database. Check .env.test loading."
+        )
+
 # Disable Sentry before any app imports so sentry_sdk.init() is skipped.
-# This prevents test error-path tests from spamming the production Sentry dashboard.
 os.environ.setdefault("PYTEST_CURRENT_TEST", "conftest")
+
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.db import Base, get_db  # noqa: E402
 from app.db import models as _models  # noqa: E402, F401 — register all models with Base.metadata
