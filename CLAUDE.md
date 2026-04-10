@@ -135,3 +135,13 @@ Auth: Supabase handles phone OTP + social sign-in. Backend issues its own JWT (3
 
 ### Testing Principle (Sprint 7 rule)
 - **No over-mocking.** Tests must exercise real code paths with realistic fixtures. The Sprint 6 Stripe webhook bug passed tests because `async_session_factory` was mocked to None, short-circuiting the buggy code path. Sprint 7 adds async SQLite test DB (`aiosqlite`) for real query testing. `db=None` tests are thin smoke only — they do not count as business logic coverage.
+
+### Test Isolation (incident-driven, April 2026)
+
+**Incident summary**: Four services (`trip_intake`, `polling_agent`, `airport_cache`, `subscriptions` webhook) bypassed FastAPI's `get_db` dependency by importing `async_session_factory` directly at module level. Every local `pytest` run wrote orphan rows to production Supabase for 15+ days. The accumulated connection pressure tripped Supabase's circuit breaker, causing a production outage recovered via password rotation and the `ENABLE_POLLING_AGENT` feature flag.
+
+**Seatbelt pattern**: `.env.test` is loaded at the top of `conftest.py` with `override=True` BEFORE any app imports. A seatbelt assertion verifies `DATABASE_URL` does not contain production hosts (`supabase.co`, `supabase.com`, `pooler.supabase.com`, `railway.app`). Tests refuse to run otherwise. `.env.test` is committed to the repo (no secrets — only placeholder values).
+
+**Injectable factory pattern**: Never use `from app.db import async_session_factory` at module level in new code. Always use `import app.db as _db` and reference `_db.async_session_factory` at call time. This allows `conftest.py` to set `app.db.async_session_factory = None` during tests, which makes all bypass paths hit their None-guard and skip DB operations. The `test_db_isolation.py` verification tests enforce this.
+
+**ENABLE_POLLING_AGENT feature flag**: Defaults to `true` in production, forced to `false` in `.env.test`. Set `ENABLE_POLLING_AGENT=false` on Railway during connection incidents to prevent the polling agent's 60-second retry loop from re-tripping circuit breakers. Re-enable once the incident is resolved.
