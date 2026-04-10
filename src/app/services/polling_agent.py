@@ -40,6 +40,10 @@ POLL_INTERVALS = [
 ]
 
 DEFAULT_SLEEP = 60
+STARTUP_DELAY = 10          # seconds to wait before first poll
+BACKOFF_BASE = 60           # initial retry interval on error
+BACKOFF_MAX = 900           # max retry interval (15 minutes)
+MAX_CONSECUTIVE_ERRORS = 20 # stop polling after this many consecutive failures
 
 
 async def _get_active_trips(session) -> list:
@@ -471,9 +475,19 @@ def _update_projected_timeline(trip_row, response) -> None:
     }
 
 
+def compute_backoff(consecutive_errors: int) -> int:
+    """Compute backoff interval: 60s, 120s, 240s, ..., capped at 900s."""
+    return min(BACKOFF_BASE * (2 ** (consecutive_errors - 1)), BACKOFF_MAX)
+
+
 async def polling_loop() -> None:
     """Infinite loop that polls active trips and processes them."""
     from app.db import async_session_factory
+
+    # Startup delay — let the container and pooler stabilize
+    await asyncio.sleep(STARTUP_DELAY)
+
+    consecutive_errors = 0
 
     while True:
         if async_session_factory is None:
@@ -486,6 +500,7 @@ async def polling_loop() -> None:
                 trips = await _get_active_trips(session)
 
                 if not trips:
+                    consecutive_errors = 0  # successful DB query
                     await asyncio.sleep(DEFAULT_SLEEP)
                     continue
 
@@ -504,8 +519,28 @@ async def polling_loop() -> None:
                     except Exception:
                         logger.exception("Error processing trip %s", trip.id)
 
+            # Success — reset backoff
+            consecutive_errors = 0
+
         except Exception:
-            logger.exception("Polling loop error")
+            consecutive_errors += 1
+            backoff = compute_backoff(consecutive_errors)
+            logger.exception(
+                "Polling loop error (consecutive_errors=%d, next_retry=%ds)",
+                consecutive_errors, backoff,
+            )
+
+            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                logger.error(
+                    "Polling agent stopped after %d consecutive errors "
+                    "(approximately 4 hours of failures). "
+                    "Manual restart required via redeploy.",
+                    consecutive_errors,
+                )
+                return  # exit the loop entirely
+
+            await asyncio.sleep(backoff)
+            continue  # skip the normal sleep below
 
         await asyncio.sleep(sleep_interval)
 
