@@ -5,11 +5,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.db import get_db
 from app.db.models import User
 from app.services.integrations.apple_auth import verify_apple_identity_token
@@ -71,7 +72,8 @@ class SocialAuthRequest(BaseModel):
 
 
 @router.post("/send-otp", status_code=200)
-async def send_otp(body: SendOtpRequest):
+@limiter.limit("10/minute")
+async def send_otp(request: Request, body: SendOtpRequest):
     client = _get_supabase()
     if client is None:
         raise HTTPException(status_code=503, detail="Auth service not configured")
@@ -86,7 +88,8 @@ async def send_otp(body: SendOtpRequest):
 
 
 @router.post("/verify-otp", status_code=200)
-async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
+@limiter.limit("10/minute")
+async def verify_otp(request: Request, body: VerifyOtpRequest, db=Depends(get_db)):
     client = _get_supabase()
     if client is None:
         raise HTTPException(status_code=503, detail="Auth service not configured")
@@ -142,7 +145,8 @@ async def verify_otp(body: VerifyOtpRequest, db=Depends(get_db)):
 
 
 @router.post("/social", status_code=200)
-async def social_auth(body: SocialAuthRequest, db=Depends(get_db)):
+@limiter.limit("10/minute")
+async def social_auth(request: Request, body: SocialAuthRequest, db=Depends(get_db)):
     if body.provider == "apple":
         return await _apple_social_auth(body, db)
     return await _google_social_auth(body, db)
