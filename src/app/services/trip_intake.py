@@ -19,9 +19,9 @@ _TRIP_STORE_MAX = 1000
 
 
 def _db_available() -> bool:
-    from app.db import async_session_factory
+    import app.db as _db
 
-    return async_session_factory is not None
+    return _db.async_session_factory is not None
 
 
 async def process_trip_intake(
@@ -69,17 +69,30 @@ async def process_trip_intake(
     # Write to DB if available
     if _db_available():
         try:
-            from app.db import async_session_factory
+            import app.db as _db
             from app.db.models import Trip as TripRow
 
-            async with async_session_factory() as session:
+            async with _db.async_session_factory() as session:
+                is_flight_number = isinstance(payload, FlightNumberTripRequest)
                 row = TripRow(
                     id=trip_id,
                     input_mode=payload.input_mode,
                     flight_number=(
                         payload.flight_number
-                        if isinstance(payload, FlightNumberTripRequest)
+                        if is_flight_number
                         else None
+                    ),
+                    origin_iata=(
+                        None if is_flight_number
+                        else payload.origin_airport
+                    ),
+                    destination_iata=(
+                        None if is_flight_number
+                        else payload.destination_airport
+                    ),
+                    airline=(
+                        None if is_flight_number
+                        else payload.airline
                     ),
                     departure_date=str(payload.departure_date),
                     home_address=payload.home_address,
@@ -105,10 +118,10 @@ async def get_trip_context(trip_id: str) -> TripContext | None:
     # Try DB first
     if _db_available():
         try:
-            from app.db import async_session_factory
+            import app.db as _db
             from app.db.models import Trip as TripRow
 
-            async with async_session_factory() as session:
+            async with _db.async_session_factory() as session:
                 row = await session.get(TripRow, uuid.UUID(trip_id))
                 if row is not None:
                     prefs = TripPreferences()

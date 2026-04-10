@@ -22,13 +22,13 @@ class SegmentDetail(BaseModel):
 
 
 class RecommendationRequest(BaseModel):
-    trip_id: str = Field(..., description="Trip ID returned from POST /v1/trips")
+    trip_id: str = Field(..., max_length=50, description="Trip ID returned from POST /v1/trips")
 
 
 class RecommendationRecomputeRequest(BaseModel):
-    trip_id: str = Field(..., description="Trip ID to recompute recommendation for")
+    trip_id: str = Field(..., max_length=50, description="Trip ID to recompute recommendation for")
     reason: str | None = Field(
-        None, description="Optional reason for recompute, e.g. 'traffic_update'"
+        None, max_length=100, description="Optional reason for recompute, e.g. 'traffic_update'"
     )
     preference_overrides: TripPreferenceOverrides | None = Field(
         None,
@@ -36,6 +36,7 @@ class RecommendationRecomputeRequest(BaseModel):
     )
     home_address: str | None = Field(
         None,
+        max_length=500,
         description="Optional new home address to use for this recompute",
     )
 

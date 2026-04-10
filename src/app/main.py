@@ -1,11 +1,14 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import sentry_sdk
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from app.api.routes import auth, devices, events, feedback, flights, health, recommendations, subscriptions, trips, users, version
 from app.core.config import settings
@@ -14,7 +17,7 @@ from app.services.integrations.airport_cache import load_airport_cache
 from app.services.integrations.firebase import init_firebase
 from app.services.polling_agent import start_polling_agent
 
-if settings.sentry_dsn:
+if settings.sentry_dsn and "PYTEST_CURRENT_TEST" not in os.environ:
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         traces_sample_rate=0.1,
@@ -68,7 +71,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # SECURITY: Must be restricted to specific origins before public launch
+    allow_origins=[
+        "https://airbridge.live",       # Production web
+        "capacitor://localhost",         # Native iOS app (Capacitor)
+        "http://localhost:5173",         # Vite dev server
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -87,6 +94,19 @@ def root():
     }
 
 
+from app.core.rate_limit import limiter
+
+app.state.limiter = limiter
+
+
+def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"code": "RATE_LIMITED", "message": "Too many requests. Please try again later."},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 app.add_exception_handler(AppError, app_error_handler)
 app.add_exception_handler(RequestValidationError, validation_error_handler)
 

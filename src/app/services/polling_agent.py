@@ -319,7 +319,14 @@ async def _process_trip(trip_row, session) -> None:
 
     # Update projected_timeline from recommendation segments
     if response.segments:
-        _update_projected_timeline(trip_row, response)
+        from app.api.routes.trips import _build_projected_timeline
+
+        dep_utc = _get_departure_utc(trip_row)
+        timeline = _build_projected_timeline(
+            response, dep_utc.isoformat() if dep_utc else None
+        )
+        if timeline:
+            trip_row.projected_timeline = timeline
         try:
             await session.commit()
         except Exception:
@@ -438,41 +445,9 @@ async def _process_trip(trip_row, session) -> None:
                     logger.exception("Failed to update sms_count for trip %s", trip_row.id)
 
 
-def _update_projected_timeline(trip_row, response) -> None:
-    """Rebuild projected_timeline JSONB from recommendation response segments."""
-    now = datetime.now(tz=timezone.utc)
-    leave_at = response.leave_home_at
-
-    # Walk through segments to compute milestone timestamps
-    cursor = leave_at
-    arrive_airport_at = None
-    clear_security_at = None
-    at_gate_at = None
-
-    for seg in response.segments:
-        dur = timedelta(minutes=seg.duration_minutes)
-        seg_end = cursor + dur
-
-        seg_id = seg.id.lower() if seg.id else ""
-        if "transport" in seg_id or "drive" in seg_id or "parking" in seg_id or "transit" in seg_id:
-            arrive_airport_at = seg_end
-        elif "tsa" in seg_id or "security" in seg_id:
-            clear_security_at = seg_end
-        elif "gate" in seg_id:
-            at_gate_at = seg_end
-
-        cursor = seg_end
-
-    dep_utc = _get_departure_utc(trip_row)
-
-    trip_row.projected_timeline = {
-        "leave_home_at": leave_at.isoformat(),
-        "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
-        "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
-        "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
-        "departure_utc": dep_utc.isoformat() if dep_utc else None,
-        "computed_at": now.isoformat(),
-    }
+def compute_backoff(consecutive_errors: int) -> int:
+    """Compute backoff interval: 60s, 120s, 240s, ..., capped at 900s."""
+    return min(BACKOFF_BASE * (2 ** (consecutive_errors - 1)), BACKOFF_MAX)
 
 
 def compute_backoff(consecutive_errors: int) -> int:
@@ -482,7 +457,12 @@ def compute_backoff(consecutive_errors: int) -> int:
 
 async def polling_loop() -> None:
     """Infinite loop that polls active trips and processes them."""
-    from app.db import async_session_factory
+    import app.db as _db
+
+    # Startup delay — let the container and pooler stabilize
+    await asyncio.sleep(STARTUP_DELAY)
+
+    consecutive_errors = 0
 
     # Startup delay — let the container and pooler stabilize
     await asyncio.sleep(STARTUP_DELAY)
@@ -490,13 +470,13 @@ async def polling_loop() -> None:
     consecutive_errors = 0
 
     while True:
-        if async_session_factory is None:
+        if _db.async_session_factory is None:
             await asyncio.sleep(DEFAULT_SLEEP)
             continue
 
         sleep_interval = DEFAULT_SLEEP
         try:
-            async with async_session_factory() as session:
+            async with _db.async_session_factory() as session:
                 trips = await _get_active_trips(session)
 
                 if not trips:

@@ -5,7 +5,9 @@ import logging
 import stripe
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from app.api.middleware.auth import get_required_user
 from app.core.config import settings
@@ -18,9 +20,9 @@ router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
 
 
 class CheckoutRequest(BaseModel):
-    price_type: str  # "monthly" or "annual"
-    success_url: str
-    cancel_url: str
+    price_type: Literal["monthly", "annual"]
+    success_url: str = Field(..., max_length=2000)
+    cancel_url: str = Field(..., max_length=2000)
 
 
 @router.post("/checkout")
@@ -84,18 +86,18 @@ async def stripe_webhook(request: Request):
     except stripe.error.SignatureVerificationError:
         return JSONResponse(status_code=400, content={"code": "INVALID_SIGNATURE", "message": "Invalid signature"})
 
-    from app.db import async_session_factory
+    import app.db as _db
     from app.db.models import User
     from sqlalchemy import select
 
-    if async_session_factory is None:
+    if _db.async_session_factory is None:
         logger.warning("No DB configured, skipping webhook processing")
         return {"status": "ok"}
 
     event_type = event["type"]
     data = event["data"]["object"]
 
-    async with async_session_factory() as session:
+    async with _db.async_session_factory() as session:
         if event_type == "checkout.session.completed":
             customer_id = getattr(data, "customer", None)
             if customer_id:
@@ -133,11 +135,27 @@ async def stripe_webhook(request: Request):
 async def get_subscription_status(user=Depends(get_required_user)):
     """Return the current user's subscription status."""
     tier, remaining = get_tier_info(user)
+
+    current_period_end = None
+    if user.stripe_customer_id and settings.stripe_secret_key:
+        try:
+            stripe.api_key = settings.stripe_secret_key
+            subscriptions = stripe.Subscription.list(
+                customer=user.stripe_customer_id,
+                status="active",
+                limit=1,
+            )
+            if subscriptions.data:
+                current_period_end = subscriptions.data[0].current_period_end
+        except Exception:
+            logger.exception("Failed to fetch Stripe subscription for user %s", user.id)
+
     return {
         "subscription_status": user.subscription_status,
         "stripe_customer_id": user.stripe_customer_id,
         "tier": tier,
         "trial_trips_remaining": remaining,
+        "current_period_end": current_period_end,
     }
 
 

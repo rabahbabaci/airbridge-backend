@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.api.middleware.auth import get_required_user
@@ -22,13 +22,13 @@ router = APIRouter(tags=["users"])
 
 
 class UpdatePreferencesRequest(BaseModel):
-    transport_mode: str | None = None
-    security_access: str | None = None
-    bag_count: int | None = None
+    transport_mode: str | None = Field(None, max_length=20)
+    security_access: str | None = Field(None, max_length=20)
+    bag_count: int | None = Field(None, ge=0, le=10)
     children: bool | None = None
-    nav_app: str | None = None
-    rideshare_app: str | None = None
-    buffer_minutes: int | None = None
+    nav_app: str | None = Field(None, max_length=50)
+    rideshare_app: str | None = Field(None, max_length=50)
+    buffer_minutes: int | None = Field(None, ge=0, le=180)
 
 
 class UserProfileResponse(BaseModel):

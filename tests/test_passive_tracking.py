@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.api.routes.trips import _build_projected_timeline
 from app.services.polling_agent import (
     INTERACTION_SIGNALS,
     _advance_trip_state,
     _get_departure_utc,
     _get_timeline_dt,
     _handle_feedback_request,
-    _update_projected_timeline,
 )
 from app.services.trip_state import (
     MONITORABLE_STATUSES,
@@ -322,8 +322,7 @@ class TestPhaseAwarePolling:
 # ---------------------------------------------------------------------------
 
 class TestProjectedTimeline:
-    def test_update_projected_timeline(self):
-        trip = _make_trip()
+    def test_build_projected_timeline(self):
         response = MagicMock()
         response.leave_home_at = datetime(2026, 4, 5, 15, 0, tzinfo=timezone.utc)
         response.segments = [
@@ -334,9 +333,8 @@ class TestProjectedTimeline:
             MagicMock(id="gate_buffer", duration_minutes=30),
         ]
 
-        _update_projected_timeline(trip, response)
+        tl = _build_projected_timeline(response, "2026-04-05T17:00:00+00:00")
 
-        tl = trip.projected_timeline
         assert tl is not None
         assert "leave_home_at" in tl
         assert "arrive_airport_at" in tl

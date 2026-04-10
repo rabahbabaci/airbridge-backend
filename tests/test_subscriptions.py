@@ -246,6 +246,7 @@ class TestSubscriptionStatus:
         assert data["tier"] == "pro"
         assert data["trial_trips_remaining"] == 2
         assert data["stripe_customer_id"] is None
+        assert data["current_period_end"] is None
 
     def test_returns_status_for_pro_user(self, pro_client):
         client, _ = pro_client
@@ -256,6 +257,51 @@ class TestSubscriptionStatus:
         assert data["tier"] == "pro"
         assert data["trial_trips_remaining"] is None
         assert data["stripe_customer_id"] == "cus_test123"
+
+    @patch("app.api.routes.subscriptions.stripe")
+    @patch("app.api.routes.subscriptions.settings")
+    def test_pro_user_gets_current_period_end(self, mock_settings, mock_stripe, pro_client):
+        mock_settings.stripe_secret_key = "sk_test_123"
+        mock_sub = MagicMock()
+        mock_sub.current_period_end = 1712000000
+        mock_subs_list = MagicMock()
+        mock_subs_list.data = [mock_sub]
+        mock_stripe.Subscription.list.return_value = mock_subs_list
+
+        client, _ = pro_client
+        resp = client.get("/v1/subscriptions/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_period_end"] == 1712000000
+        mock_stripe.Subscription.list.assert_called_once_with(
+            customer="cus_test123", status="active", limit=1,
+        )
+
+    @patch("app.api.routes.subscriptions.stripe")
+    @patch("app.api.routes.subscriptions.settings")
+    def test_stripe_error_returns_null_period_end(self, mock_settings, mock_stripe, pro_client):
+        mock_settings.stripe_secret_key = "sk_test_123"
+        mock_stripe.Subscription.list.side_effect = Exception("Stripe down")
+
+        client, _ = pro_client
+        resp = client.get("/v1/subscriptions/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_period_end"] is None
+
+    @patch("app.api.routes.subscriptions.stripe")
+    @patch("app.api.routes.subscriptions.settings")
+    def test_no_active_subscriptions_returns_null(self, mock_settings, mock_stripe, pro_client):
+        mock_settings.stripe_secret_key = "sk_test_123"
+        mock_subs_list = MagicMock()
+        mock_subs_list.data = []
+        mock_stripe.Subscription.list.return_value = mock_subs_list
+
+        client, _ = pro_client
+        resp = client.get("/v1/subscriptions/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["current_period_end"] is None
 
 
 class TestPortal:

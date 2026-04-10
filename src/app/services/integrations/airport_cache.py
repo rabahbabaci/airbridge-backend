@@ -14,9 +14,9 @@ async def load_airport_cache() -> None:
     """Load all airports from DB into memory. Call once at app startup."""
     global _airport_cache, _cache_loaded
 
-    from app.db import engine, async_session_factory
+    import app.db as _db
 
-    if engine is None or async_session_factory is None:
+    if _db.engine is None or _db.async_session_factory is None:
         logger.warning("Airport cache: no DB configured, using hardcoded fallbacks only")
         _cache_loaded = True
         return
@@ -24,7 +24,7 @@ async def load_airport_cache() -> None:
     try:
         from app.db.models import Airport
 
-        async with async_session_factory() as session:
+        async with _db.async_session_factory() as session:
             result = await session.execute(select(Airport))
             rows = result.scalars().all()
 

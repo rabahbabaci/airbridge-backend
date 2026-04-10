@@ -1,11 +1,11 @@
 import logging
 import uuid as _uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.middleware.auth import get_optional_user, get_required_user
 from app.core.errors import UnsupportedModeError
@@ -17,15 +17,79 @@ from app.schemas.trips import (
     TripContext,
     TripRequest,
 )
+from app.services.trip_intake import process_trip_intake
 
 
 class UpdateTripRequest(BaseModel):
-    home_address: str | None = None
-from app.services.trip_intake import process_trip_intake
+    home_address: str | None = Field(None, max_length=500)
+    flight_number: str | None = Field(None, max_length=10, pattern=r"^[A-Za-z0-9]{2,8}$")
+    departure_date: str | None = Field(None, max_length=10, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    transport_mode: str | None = Field(None, max_length=20)
+    security_access: str | None = Field(None, max_length=20)
+    buffer_preference: int | None = Field(None, ge=0, le=180)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trips", tags=["trips"])
+
+
+def _build_projected_timeline(rec_response, dep_utc: str | None) -> dict | None:
+    """Build projected_timeline dict from recommendation response segments.
+
+    Used by track_trip, update_trip, and polling_agent.
+    """
+    if not rec_response or not rec_response.segments:
+        return None
+
+    cursor = rec_response.leave_home_at
+    arrive_airport_at = None
+    clear_security_at = None
+    at_gate_at = None
+
+    for seg in rec_response.segments:
+        seg_end = cursor + timedelta(minutes=seg.duration_minutes)
+        seg_id = seg.id.lower() if seg.id else ""
+        if any(k in seg_id for k in ("transport", "drive", "parking", "transit")):
+            arrive_airport_at = seg_end
+        elif "tsa" in seg_id or "security" in seg_id:
+            clear_security_at = seg_end
+        elif "gate" in seg_id:
+            at_gate_at = seg_end
+        cursor = seg_end
+
+    return {
+        "leave_home_at": rec_response.leave_home_at.isoformat(),
+        "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
+        "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
+        "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
+        "departure_utc": dep_utc,
+        "computed_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+
+def _compute_accuracy_delta(row, feedback) -> int | None:
+    """Compute accuracy_delta = actual_gate_wait - predicted_gate_buffer.
+
+    Positive = arrived earlier than predicted (more gate time than expected).
+    Negative = arrived later than predicted (less gate time than expected).
+    Returns None when data is missing.
+    """
+    if feedback is None or feedback.minutes_at_gate is None:
+        return None
+    timeline = row.projected_timeline
+    if not timeline:
+        return None
+    at_gate_at = timeline.get("at_gate_at")
+    departure_utc = timeline.get("departure_utc")
+    if not at_gate_at or not departure_utc:
+        return None
+    try:
+        gate_dt = datetime.fromisoformat(str(at_gate_at).replace("Z", "+00:00"))
+        dep_dt = datetime.fromisoformat(str(departure_utc).replace("Z", "+00:00"))
+        predicted_gate_buffer = (dep_dt - gate_dt).total_seconds() / 60
+        return round(feedback.minutes_at_gate - predicted_gate_buffer)
+    except (ValueError, TypeError):
+        return None
 
 
 @router.post("", response_model=TripContext, status_code=201)
@@ -107,39 +171,92 @@ async def track_trip(
             rec_response = await compute_recommendation(
                 RecommendationRequest(trip_id=trip_id), user=user
             )
-            if rec_response and rec_response.segments:
-                from datetime import timedelta
-                cursor = rec_response.leave_home_at
-                arrive_airport_at = None
-                clear_security_at = None
-                at_gate_at = None
-                for seg in rec_response.segments:
-                    seg_end = cursor + timedelta(minutes=seg.duration_minutes)
-                    seg_id = seg.id.lower() if seg.id else ""
-                    if any(k in seg_id for k in ("transport", "drive", "parking", "transit")):
-                        arrive_airport_at = seg_end
-                    elif "tsa" in seg_id or "security" in seg_id:
-                        clear_security_at = seg_end
-                    elif "gate" in seg_id:
-                        at_gate_at = seg_end
-                    cursor = seg_end
-
-                dep_utc = row.selected_departure_utc
-                row.projected_timeline = {
-                    "leave_home_at": rec_response.leave_home_at.isoformat(),
-                    "arrive_airport_at": arrive_airport_at.isoformat() if arrive_airport_at else None,
-                    "clear_security_at": clear_security_at.isoformat() if clear_security_at else None,
-                    "at_gate_at": at_gate_at.isoformat() if at_gate_at else None,
-                    "departure_utc": dep_utc,
-                    "computed_at": date.today().isoformat(),
-                }
+            timeline = _build_projected_timeline(rec_response, row.selected_departure_utc)
+            if timeline:
+                row.projected_timeline = timeline
         except Exception:
-            logger.warning("Failed to compute projected_timeline on track for trip %s", trip_id)
+            logger.exception("Failed to compute projected_timeline on track for trip %s", trip_id)
+
+        # Populate flight route columns for history enrichment
+        if row.input_mode == "flight_number" and row.flight_number:
+            try:
+                from app.services.flight_snapshot_service import get_available_flights
+
+                flights = get_available_flights(row.flight_number, row.departure_date)
+                if flights:
+                    selected_utc = (row.selected_departure_utc or "").strip()
+                    if selected_utc:
+                        flight = next(
+                            (f for f in flights if (f.get("departure_time_utc") or "").strip() == selected_utc),
+                            flights[0],
+                        )
+                    else:
+                        flight = flights[0]
+                    row.origin_iata = flight.get("origin_iata")
+                    row.destination_iata = flight.get("destination_iata")
+                    row.airline = flight.get("airline_name")
+            except Exception:
+                logger.exception("Failed to populate flight route for trip %s", trip_id)
 
         await db.commit()
         return {"status": "tracked", "trip_id": trip_id, "trip_count": user.trip_count}
 
     raise HTTPException(status_code=400, detail=f"Cannot track trip in status {current}")
+
+
+UNTRACKABLE_STATUSES = ("active", "en_route", "at_airport", "at_gate")
+
+
+@router.post("/{trip_id}/untrack")
+async def untrack_trip(
+    trip_id: str,
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Untrack a trip: reset to draft, clear phase fields, decrement trip_count."""
+    if db is None:
+        return {"status": "untracked", "trip_id": trip_id, "trip_count": 0}
+
+    try:
+        tid = _uuid.UUID(trip_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    row = await db.get(TripRow, tid)
+    if row is None or (row.user_id is not None and row.user_id != user.id):
+        raise HTTPException(status_code=404, detail="Trip not found")
+
+    current = row.trip_status or row.status or "draft"
+    if current not in UNTRACKABLE_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot untrack trip in status '{current}'. Only active, en_route, at_airport, and at_gate trips can be untracked.",
+        )
+
+    # Reset to draft
+    row.status = "draft"
+    row.trip_status = "draft"
+
+    # Clear phase fields
+    row.projected_timeline = None
+    row.last_pushed_leave_home_at = None
+    row.push_count = 0
+    row.morning_email_sent_at = None
+    row.time_to_go_push_sent_at = None
+    row.sms_count = 0
+    row.actual_depart_at = None
+    row.auto_completed = False
+    row.feedback_requested_at = None
+
+    # Decrement trip_count with floor of 0
+    user.trip_count = max((user.trip_count or 0) - 1, 0)
+
+    await db.commit()
+    return {
+        "status": "untracked",
+        "trip_id": trip_id,
+        "trip_count": user.trip_count,
+    }
 
 
 ACTIVE_STATUSES = ("created", "active", "en_route", "at_airport", "at_gate")
@@ -178,6 +295,46 @@ async def get_active_trip(
             "selected_departure_utc": row.selected_departure_utc,
             "preferences_json": row.preferences_json,
         }
+    }
+
+
+NON_COMPLETE_STATUSES = ("draft", "created", "active", "en_route", "at_airport", "at_gate")
+
+
+@router.get("/active-list")
+async def get_active_list(
+    user: User = Depends(get_required_user),
+    db=Depends(get_db),
+):
+    """Return all non-completed trips for the current user."""
+    if db is None:
+        return {"trips": []}
+
+    stmt = (
+        select(TripRow)
+        .where(
+            TripRow.user_id == user.id,
+            TripRow.trip_status.in_(NON_COMPLETE_STATUSES),
+        )
+        .order_by(TripRow.departure_date.asc(), TripRow.created_at.desc())
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+
+    return {
+        "trips": [
+            {
+                "trip_id": str(row.id),
+                "flight_number": row.flight_number,
+                "airline": row.airline,
+                "origin_iata": row.origin_iata,
+                "destination_iata": row.destination_iata,
+                "departure_date": row.departure_date,
+                "status": row.trip_status or row.status,
+                "projected_timeline": row.projected_timeline,
+                "home_address": row.home_address,
+            }
+            for row in rows
+        ]
     }
 
 
@@ -227,6 +384,10 @@ async def get_trip_history(
             "departure_date": row.departure_date,
             "home_address": row.home_address,
             "status": row.trip_status,
+            "origin_iata": row.origin_iata,
+            "destination_iata": row.destination_iata,
+            "airline": row.airline,
+            "accuracy_delta_minutes": _compute_accuracy_delta(row, fb),
             "feedback": {
                 "followed_recommendation": fb.followed_recommendation,
                 "minutes_at_gate": fb.minutes_at_gate,
@@ -262,7 +423,7 @@ async def update_trip(
     user: User = Depends(get_required_user),
     db=Depends(get_db),
 ):
-    """Update mutable fields on a trip."""
+    """Update mutable fields on a trip. Draft/active only."""
     if db is None:
         return {"status": "updated", "trip_id": trip_id}
 
@@ -272,14 +433,56 @@ async def update_trip(
         raise HTTPException(status_code=404, detail="Trip not found")
 
     row = await db.get(TripRow, tid)
-    if row is None:
+    if row is None or (row.user_id is not None and row.user_id != user.id):
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    if row.user_id is not None and row.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    current = row.trip_status or row.status or "draft"
+    if current not in ("draft", "active"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot edit trip in status '{current}'. Only draft and active trips can be edited.",
+        )
 
+    # Apply field updates
     if payload.home_address is not None:
         row.home_address = payload.home_address
+    if payload.flight_number is not None:
+        row.flight_number = payload.flight_number.strip().upper()
+    if payload.departure_date is not None:
+        row.departure_date = payload.departure_date
+
+    # Preference-level updates (stored in preferences_json)
+    import json as _json
+
+    prefs_changed = False
+    prefs = _json.loads(row.preferences_json) if row.preferences_json else {}
+    if payload.transport_mode is not None:
+        prefs["transport_mode"] = payload.transport_mode
+        prefs_changed = True
+    if payload.security_access is not None:
+        prefs["security_access"] = payload.security_access
+        prefs_changed = True
+    if payload.buffer_preference is not None:
+        prefs["gate_time_minutes"] = payload.buffer_preference
+        prefs_changed = True
+    if prefs_changed:
+        row.preferences_json = _json.dumps(prefs)
+
+    # Recompute recommendation for active trips
+    if current == "active":
+        await db.flush()  # ensure get_trip_context sees updated fields
+        try:
+            from app.schemas.recommendations import RecommendationRequest
+            from app.services.recommendation_service import compute_recommendation
+
+            rec_response = await compute_recommendation(
+                RecommendationRequest(trip_id=trip_id), user=user
+            )
+            timeline = _build_projected_timeline(rec_response, row.selected_departure_utc)
+            if timeline:
+                row.projected_timeline = timeline
+        except Exception:
+            logger.exception("Failed to recompute on update for trip %s", trip_id)
 
     await db.commit()
     return {"status": "updated", "trip_id": trip_id}
