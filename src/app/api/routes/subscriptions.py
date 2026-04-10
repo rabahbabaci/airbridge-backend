@@ -84,18 +84,18 @@ async def stripe_webhook(request: Request):
     except stripe.error.SignatureVerificationError:
         return JSONResponse(status_code=400, content={"code": "INVALID_SIGNATURE", "message": "Invalid signature"})
 
-    from app.db import async_session_factory
+    import app.db as _db
     from app.db.models import User
     from sqlalchemy import select
 
-    if async_session_factory is None:
+    if _db.async_session_factory is None:
         logger.warning("No DB configured, skipping webhook processing")
         return {"status": "ok"}
 
     event_type = event["type"]
     data = event["data"]["object"]
 
-    async with async_session_factory() as session:
+    async with _db.async_session_factory() as session:
         if event_type == "checkout.session.completed":
             customer_id = getattr(data, "customer", None)
             if customer_id:

@@ -40,10 +40,20 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 
+import app.db as _app_db  # noqa: E402 — import as module for monkeypatching
 from app.db import Base, get_db  # noqa: E402
 from app.db import models as _models  # noqa: E402, F401 — register all models with Base.metadata
 from app.main import app  # noqa: E402
 from app.api.middleware.auth import get_required_user  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Neutralize module-level async_session_factory so services that bypass
+# get_db (trip_intake, polling_agent, airport_cache, subscriptions webhook)
+# hit their None-guard and skip DB writes during tests.
+# ---------------------------------------------------------------------------
+_original_factory = _app_db.async_session_factory
+_app_db.async_session_factory = None
 
 
 # ---------------------------------------------------------------------------

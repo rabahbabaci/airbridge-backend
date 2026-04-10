@@ -443,16 +443,16 @@ async def _process_trip(trip_row, session) -> None:
 
 async def polling_loop() -> None:
     """Infinite loop that polls active trips and processes them."""
-    from app.db import async_session_factory
+    import app.db as _db
 
     while True:
-        if async_session_factory is None:
+        if _db.async_session_factory is None:
             await asyncio.sleep(DEFAULT_SLEEP)
             continue
 
         sleep_interval = DEFAULT_SLEEP
         try:
-            async with async_session_factory() as session:
+            async with _db.async_session_factory() as session:
                 trips = await _get_active_trips(session)
 
                 if not trips:
