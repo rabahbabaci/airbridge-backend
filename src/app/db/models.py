@@ -75,8 +75,11 @@ class Trip(Base):
     home_address: Mapped[str] = mapped_column(String, nullable=False)
     selected_departure_utc: Mapped[str | None] = mapped_column(String, nullable=True)
     preferences_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # DEPRECATED: use trip_status for all reads. Dual-written for backward compat.
+    # TODO: drop `status` column in follow-up migration (Option B consolidation).
     status: Mapped[str] = mapped_column(String, default="created", server_default="created")
     last_pushed_leave_home_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Source of truth for trip status. All read paths must use this column only.
     trip_status: Mapped[str] = mapped_column(String, default="created", server_default="created")
     push_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     morning_email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

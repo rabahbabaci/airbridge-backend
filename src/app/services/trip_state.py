@@ -8,7 +8,7 @@ MONITORABLE_STATUSES = {"active", "en_route", "at_airport", "at_gate"}
 
 def get_trip_status(trip_row) -> str:
     """Return current status from the DB row."""
-    return trip_row.trip_status or trip_row.status or "created"
+    return trip_row.trip_status
 
 
 def should_activate(trip_row, now: datetime) -> bool:

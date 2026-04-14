@@ -151,7 +151,7 @@ async def track_trip(
     if row.user_id is None:
         row.user_id = user.id
 
-    current = row.trip_status or row.status or "draft"
+    current = row.trip_status
 
     # Idempotent: already tracked
     if current in ("active", "en_route", "at_airport", "at_gate", "complete"):
@@ -226,7 +226,7 @@ async def untrack_trip(
     if row is None or (row.user_id is not None and row.user_id != user.id):
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    current = row.trip_status or row.status or "draft"
+    current = row.trip_status
     if current not in UNTRACKABLE_STATUSES:
         raise HTTPException(
             status_code=409,
@@ -275,7 +275,7 @@ async def get_active_trip(
         select(TripRow)
         .where(
             TripRow.user_id == user.id,
-            TripRow.status.in_(ACTIVE_STATUSES),
+            TripRow.trip_status.in_(ACTIVE_STATUSES),
             TripRow.departure_date >= today,
         )
         .order_by(TripRow.departure_date.asc(), TripRow.created_at.desc())
@@ -291,7 +291,7 @@ async def get_active_trip(
             "flight_number": row.flight_number,
             "departure_date": row.departure_date,
             "home_address": row.home_address,
-            "status": row.status,
+            "status": row.trip_status,
             "selected_departure_utc": row.selected_departure_utc,
             "preferences_json": row.preferences_json,
         }
@@ -329,7 +329,7 @@ async def get_active_list(
                 "origin_iata": row.origin_iata,
                 "destination_iata": row.destination_iata,
                 "departure_date": row.departure_date,
-                "status": row.trip_status or row.status,
+                "status": row.trip_status,
                 "projected_timeline": row.projected_timeline,
                 "home_address": row.home_address,
             }
@@ -436,7 +436,7 @@ async def update_trip(
     if row is None or (row.user_id is not None and row.user_id != user.id):
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    current = row.trip_status or row.status or "draft"
+    current = row.trip_status
     if current not in ("draft", "active"):
         raise HTTPException(
             status_code=409,
@@ -511,7 +511,7 @@ async def get_trip(
         "flight_number": row.flight_number,
         "departure_date": row.departure_date,
         "home_address": row.home_address,
-        "status": row.status,
+        "status": row.trip_status,
         "selected_departure_utc": row.selected_departure_utc,
         "preferences_json": row.preferences_json,
     }
