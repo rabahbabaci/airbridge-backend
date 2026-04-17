@@ -444,10 +444,10 @@ async def update_trip(
         raise HTTPException(status_code=404, detail="Trip not found")
 
     current = row.trip_status
-    if current not in ("draft", "active"):
+    if current not in ("draft", "created", "active"):
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot edit trip in status '{current}'. Only draft and active trips can be edited.",
+            detail=f"Cannot edit trip in status '{current}'. Only pre-track and active trips can be edited.",
         )
 
     # Apply field updates
