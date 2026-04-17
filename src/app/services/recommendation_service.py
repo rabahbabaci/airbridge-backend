@@ -429,6 +429,16 @@ async def recompute_recommendation(
     if context is None:
         return None
     context = _effective_context(context, payload.preference_overrides)
+    # Apply trip-level overrides for edit-mode preview (not persisted to DB)
+    trip_updates = {}
+    if payload.flight_number is not None:
+        trip_updates["flight_number"] = payload.flight_number
+    if payload.departure_date is not None:
+        trip_updates["departure_date"] = payload.departure_date
+    if payload.selected_departure_utc is not None:
+        trip_updates["selected_departure_utc"] = payload.selected_departure_utc
+    if trip_updates:
+        context = context.model_copy(update=trip_updates)
     snapshot = build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
     response = await _build_response(payload.trip_id, context, snapshot, now, user=user)

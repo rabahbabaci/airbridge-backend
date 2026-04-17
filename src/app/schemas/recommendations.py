@@ -39,6 +39,21 @@ class RecommendationRecomputeRequest(BaseModel):
         max_length=500,
         description="Optional new home address to use for this recompute",
     )
+    flight_number: str | None = Field(
+        None,
+        max_length=10,
+        description="Optional flight number override for edit-mode preview (not persisted)",
+    )
+    departure_date: str | None = Field(
+        None,
+        max_length=10,
+        description="Optional departure date override for edit-mode preview (not persisted)",
+    )
+    selected_departure_utc: str | None = Field(
+        None,
+        max_length=50,
+        description="Optional selected departure UTC override for edit-mode preview (not persisted)",
+    )
 
 
 class RecommendationResponse(BaseModel):
