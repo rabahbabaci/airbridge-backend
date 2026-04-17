@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.middleware.auth import get_optional_user, get_required_user
 from app.core.errors import UnsupportedModeError
@@ -22,11 +22,18 @@ from app.services.trip_intake import process_trip_intake
 
 class UpdateTripRequest(BaseModel):
     home_address: str | None = Field(None, max_length=500)
-    flight_number: str | None = Field(None, max_length=10, pattern=r"^[A-Za-z0-9]{2,8}$")
+    flight_number: str | None = Field(None, max_length=10)
     departure_date: str | None = Field(None, max_length=10, pattern=r"^\d{4}-\d{2}-\d{2}$")
     transport_mode: str | None = Field(None, max_length=20)
     security_access: str | None = Field(None, max_length=20)
     buffer_preference: int | None = Field(None, ge=0, le=180)
+
+    @field_validator("flight_number", mode="before")
+    @classmethod
+    def normalize_flight_number(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return v.strip().upper()
 
 logger = logging.getLogger(__name__)
 
