@@ -27,9 +27,6 @@ firebase-admin
 # payments
 stripe
 
-# email
-sendgrid
-
 # sms
 twilio
 

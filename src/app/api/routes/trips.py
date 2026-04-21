@@ -335,7 +335,6 @@ async def untrack_trip(
     row.projected_timeline = None
     row.last_pushed_leave_home_at = None
     row.push_count = 0
-    row.morning_email_sent_at = None
     row.time_to_go_push_sent_at = None
     row.sms_count = 0
     row.actual_depart_at = None
