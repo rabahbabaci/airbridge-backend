@@ -168,6 +168,14 @@ def _fetch_departures_window(iata: str, from_local: str, to_local: str) -> list[
             f"connection error fetching departures for {iata} {from_local}-{to_local}"
         ) from e
 
+    # AeroDataBox returns HTTP 204 "No Content" for airport/date combinations
+    # with no matching departures (confirmed via cache-control: public,max-age=30
+    # on the upstream response — stable, not transient). 204 is a success response
+    # per RFC 7231; treat it as an empty list, not an error. Without this, 204
+    # would fall through to _classify_status and be misclassified as Unavailable.
+    if response.status_code == 204:
+        return []
+
     if response.status_code != 200:
         exc_cls = _classify_status(response.status_code)
         raise exc_cls(
@@ -270,6 +278,14 @@ def lookup_flights(flight_number: str, date_str: str) -> list[dict]:
         raise AeroDataBoxUnavailable(
             f"connection error fetching flight {flight_number} on {date_str}"
         ) from e
+
+    # AeroDataBox returns HTTP 204 "No Content" for flight numbers it doesn't
+    # recognize (confirmed via direct RapidAPI curl — stable, cached by their
+    # edge). 204 is a success response per RFC 7231; treat it as an empty list,
+    # not an error. The route handler at flights.py maps empty list to 404
+    # "No flights found", which is the correct user-facing behavior.
+    if response.status_code == 204:
+        return []
 
     if response.status_code != 200:
         exc_cls = _classify_status(response.status_code)

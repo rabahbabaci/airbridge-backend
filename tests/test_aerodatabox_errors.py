@@ -139,6 +139,35 @@ class TestLookupFlightsErrors:
         finally:
             patcher.stop()
 
+    def test_204_no_content_returns_empty_no_exception(self):
+        """AeroDataBox returns 204 No Content when the flight number is not
+        recognized. Per RFC 7231 that's a success response — treat it as an
+        empty list, not an error. This mirrors the 200+empty-list behavior."""
+        patcher = _patch_httpx_get(_MockResponse(204, payload=None))
+        try:
+            assert lookup_flights("UA99999", "2026-05-01") == []
+        finally:
+            patcher.stop()
+
+    def test_204_does_not_attempt_json_parse(self):
+        """HTTP 204 responses have an empty body by spec. Calling .json() on
+        an empty body would raise JSONDecodeError. Verify lookup_flights
+        short-circuits on status==204 before reaching the JSON parser."""
+
+        class _ExplodingJsonResponse:
+            status_code = 204
+
+            def json(self):
+                # If this method is ever called on a 204, that's a bug.
+                raise AssertionError("lookup_flights should not call .json() on 204")
+
+        patcher = _patch_httpx_get(_ExplodingJsonResponse())
+        try:
+            # Should return [] without ever hitting .json()
+            assert lookup_flights("UA99999", "2026-05-01") == []
+        finally:
+            patcher.stop()
+
 
 # ── Integration layer: lookup_airport_departures (two-window semantics) ──────
 
@@ -239,6 +268,20 @@ class TestLookupAirportDeparturesPartialSuccess:
         finally:
             patcher.stop()
 
+    def test_both_windows_204_returns_empty_no_exception(self):
+        """Both departure windows returning 204 No Content (airport known but
+        zero departures that day) should produce an empty list, not raise.
+        Parallel to the 200+empty case — 204 is a success per RFC 7231."""
+        patcher = self._patch_paired(
+            _MockResponse(204, payload=None),
+            _MockResponse(204, payload=None),
+        )
+        try:
+            result = lookup_airport_departures("SFO", "2026-06-01")
+            assert result == []
+        finally:
+            patcher.stop()
+
 
 # ── Route layer: /v1/flights/{flight_number}/{date} ──────────────────────────
 
@@ -291,6 +334,31 @@ class TestFlightsByNumberRouteTranslation:
         """Default autouse patch returns [] → legit empty → 404 flight_not_found."""
         resp = client.get("/v1/flights/AA123/2026-06-01")
         assert resp.status_code == 404
+
+    def test_upstream_204_end_to_end_returns_404(self, client: TestClient):
+        """End-to-end proof that 204 from upstream maps to 404 at our route.
+
+        Restores the real lookup_flights (conftest autouse stubs it to return
+        [] by default) and mocks httpx to return 204. Verifies the new 204
+        branch in lookup_flights returns [], which the route handler then
+        converts to a 404 "No flights found" response.
+        """
+        from app.services.integrations import aerodatabox as adb_module
+
+        # Override the autouse stub with the real function so the 204 branch
+        # in lookup_flights actually runs.
+        httpx_patcher = _patch_httpx_get(_MockResponse(204, payload=None))
+        try:
+            with patch(
+                "app.services.flight_snapshot_service.lookup_flights",
+                adb_module.lookup_flights,
+            ):
+                resp = client.get("/v1/flights/UA99999/2026-05-01")
+        finally:
+            httpx_patcher.stop()
+
+        assert resp.status_code == 404
+        assert "No flights found" in resp.json()["detail"]
 
 
 # ── Route layer: /v1/flights/search ──────────────────────────────────────────
