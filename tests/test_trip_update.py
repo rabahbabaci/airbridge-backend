@@ -178,3 +178,145 @@ class TestUpdateTripRealDB:
         assert prefs["security_access"] == "precheck"
         assert prefs["gate_time_minutes"] == 45
         assert prefs["bag_count"] == 2  # preserved from original
+
+    # ── Extended preference fields (Sprint 7 cleanup) ────────────────────
+    # bag_count, traveling_with_children, has_boarding_pass,
+    # extra_time_minutes, confidence_profile — previously unreachable via PUT.
+
+    def test_edit_draft_updates_bag_count(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving"}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"bag_count": 3})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["bag_count"] == 3
+
+    def test_edit_draft_updates_traveling_with_children(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving"}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"traveling_with_children": True})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["traveling_with_children"] is True
+
+    def test_edit_draft_updates_has_boarding_pass(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving", "has_boarding_pass": true}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"has_boarding_pass": False})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["has_boarding_pass"] is False
+
+    def test_edit_draft_updates_extra_time_minutes(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving"}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"extra_time_minutes": 30})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["extra_time_minutes"] == 30
+
+    def test_edit_draft_updates_confidence_profile(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving"}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"confidence_profile": "safety"})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["confidence_profile"] == "safety"
+
+    def test_edit_all_five_new_prefs_in_one_request(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json='{"transport_mode": "driving"}')
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={
+            "bag_count": 2,
+            "traveling_with_children": True,
+            "has_boarding_pass": False,
+            "extra_time_minutes": 15,
+            "confidence_profile": "risk",
+        })
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["bag_count"] == 2
+        assert prefs["traveling_with_children"] is True
+        assert prefs["has_boarding_pass"] is False
+        assert prefs["extra_time_minutes"] == 15
+        assert prefs["confidence_profile"] == "risk"
+        # Pre-existing transport_mode should survive the partial update.
+        assert prefs["transport_mode"] == "driving"
+
+    def test_partial_update_preserves_existing_new_prefs(self, authed_db_client):
+        """Touching transport_mode must not clobber bag_count / has_boarding_pass
+        already in preferences_json."""
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        seed_prefs = json.dumps({
+            "transport_mode": "driving",
+            "bag_count": 3,
+            "has_boarding_pass": False,
+            "confidence_profile": "safety",
+        })
+        self._seed(factory, mock_user.id, trip_id, status="draft",
+                   preferences_json=seed_prefs)
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"transport_mode": "rideshare"})
+        assert resp.status_code == 200
+
+        row = self._read_trip(factory, trip_id)
+        prefs = json.loads(row.preferences_json)
+        assert prefs["transport_mode"] == "rideshare"  # changed
+        assert prefs["bag_count"] == 3                  # preserved
+        assert prefs["has_boarding_pass"] is False      # preserved
+        assert prefs["confidence_profile"] == "safety"  # preserved
+
+    def test_bag_count_out_of_range_returns_422(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft")
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"bag_count": 11})
+        assert resp.status_code == 422
+
+    def test_extra_time_invalid_value_returns_422(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft")
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"extra_time_minutes": 10})
+        assert resp.status_code == 422
+
+    def test_confidence_profile_invalid_returns_422(self, authed_db_client):
+        client, factory, mock_user = authed_db_client
+        trip_id = uuid.uuid4()
+        self._seed(factory, mock_user.id, trip_id, status="draft")
+
+        resp = client.put(f"/v1/trips/{trip_id}", json={"confidence_profile": "chaos"})
+        assert resp.status_code == 422
