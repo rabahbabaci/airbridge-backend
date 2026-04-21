@@ -18,7 +18,7 @@ from app.services.flight_snapshot_service import (
     build_flight_info_and_status,
     snapshot_from_columns,
 )
-from app.services.integrations.aerodatabox import lookup_flights
+from app.services.integrations.aerodatabox import AeroDataBoxError, lookup_flights
 from app.services.notifications import (
     CANCELLATION,
     GATE_CHANGE,
@@ -194,6 +194,12 @@ async def refresh_flight_status(trip_row, session) -> tuple[bool, dict]:
 
     try:
         flights = lookup_flights(flight_number, str(departure_date))
+    except AeroDataBoxError as e:
+        logger.warning(
+            "refresh_flight_status skipped (trip %s): %s",
+            trip_row.id, type(e).__name__,
+        )
+        return (False, {})
     except Exception:
         logger.exception(
             "refresh_flight_status: lookup_flights raised for trip %s", trip_row.id
@@ -547,34 +553,6 @@ async def _process_trip(trip_row, session) -> None:
             "Failed to commit projected_timeline / latest_recommendation for trip %s",
             trip_row.id,
         )
-
-    # Morning email: 6 hours before departure, if not already sent
-    secs = _seconds_to_departure(trip_row)
-    if (
-        secs is not None
-        and secs <= 6 * 3600
-        and getattr(trip_row, "morning_email_sent_at", None) is None
-        and user
-        and user.email
-    ):
-        from app.services.notifications.email_service import send_morning_briefing
-
-        segments = [
-            {"label": s.label, "duration_minutes": s.duration_minutes}
-            for s in response.segments
-        ]
-        trip_data = {
-            "flight_number": trip_row.flight_number,
-            "departure_date": trip_row.departure_date,
-            "leave_by_time": _format_local_time(new_leave_at, response.origin_airport_code),
-            "segments": segments,
-        }
-        if send_morning_briefing(user.email, trip_data):
-            trip_row.morning_email_sent_at = datetime.now(tz=timezone.utc)
-            try:
-                await session.commit()
-            except Exception:
-                logger.exception("Failed to update morning_email_sent_at for trip %s", trip_row.id)
 
     # Check for leave-by shift notification
     if should_notify_leave_by_shift(trip_row.last_pushed_leave_home_at, new_leave_at):

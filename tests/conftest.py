@@ -59,6 +59,39 @@ _app_db.async_session_factory = None
 
 
 # ---------------------------------------------------------------------------
+# Default AeroDataBox behavior for tests that don't explicitly mock it.
+#
+# Task 3a (Apr 2026) replaced silent empty-list fallback with typed
+# AeroDataBoxError subclasses. POST /v1/recommendations now runs with
+# strict=True and raises on upstream failure. Most tests in this suite
+# don't care about ADB — they test bag_count logic, tier fields, route
+# search filtering, etc. — and previously got away with not mocking
+# because the silent failure returned []. Preserve that ergonomics by
+# globally patching lookup_flights to return [] for every test that
+# doesn't override it. Tests that DO care about ADB (test_route_search,
+# test_track_populate, test_polling_phase2, test_phase3_trip_detail,
+# test_aerodatabox_errors) install their own patches, which supersede
+# this default within their scope.
+# ---------------------------------------------------------------------------
+from unittest.mock import patch  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _default_adb_lookup_returns_empty():
+    """Patch lookup_flights at every import site to return [] by default.
+
+    This mirrors the pre-Task-3a "silent empty on ADB failure" behavior
+    for tests that don't explicitly mock it. Per-test `with patch(...)`
+    blocks still work — they replace the mock within their scope.
+    """
+    with (
+        patch("app.services.flight_snapshot_service.lookup_flights", return_value=[]),
+        patch("app.services.polling_agent.lookup_flights", return_value=[]),
+    ):
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Existing fixture (db=None) — untouched, used by existing tests
 # ---------------------------------------------------------------------------
 

@@ -429,15 +429,21 @@ async def _build_response(
 async def compute_recommendation(
     payload: RecommendationRequest,
     user=None,
+    *,
+    strict: bool = False,
 ) -> RecommendationResponse | None:
     """
     Compute leave-home recommendation for the given trip.
     Returns None if trip_id is not found (caller should return 404).
+
+    ``strict`` threads into build_flight_snapshot — see its docstring.
+    Route handlers for user-initiated compute set strict=True so ADB
+    outages surface as HTTP 503; background callers leave it False.
     """
     context = await get_trip_context(payload.trip_id)
     if context is None:
         return None
-    snapshot = build_flight_snapshot(context)
+    snapshot = build_flight_snapshot(context, strict=strict)
     now = datetime.now(tz=timezone.utc)
     return await _build_response(str(context.trip_id), context, snapshot, now, user=user)
 
@@ -447,6 +453,7 @@ async def recompute_recommendation(
     user=None,
     *,
     prefetched_snapshot: FlightSnapshot | None = None,
+    strict: bool = False,
 ) -> RecommendationResponse | None:
     """
     Recompute recommendation; uses preference_overrides when provided.
@@ -477,7 +484,7 @@ async def recompute_recommendation(
         # hypothetical one being previewed. Force fresh ADB path.
         prefetched_snapshot = None
 
-    snapshot = prefetched_snapshot or build_flight_snapshot(context)
+    snapshot = prefetched_snapshot or build_flight_snapshot(context, strict=strict)
     now = datetime.now(tz=timezone.utc)
     response = await _build_response(payload.trip_id, context, snapshot, now, user=user)
     if payload.reason:

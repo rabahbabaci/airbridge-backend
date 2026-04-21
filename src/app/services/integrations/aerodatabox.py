@@ -7,6 +7,34 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class AeroDataBoxError(Exception):
+    """Base class for AeroDataBox integration failures."""
+
+
+class AeroDataBoxNotFound(AeroDataBoxError):
+    """HTTP 404 — flight/route genuinely doesn't exist in ADB."""
+
+
+class AeroDataBoxRateLimited(AeroDataBoxError):
+    """HTTP 429 — RapidAPI rate limit hit."""
+
+
+class AeroDataBoxUnavailable(AeroDataBoxError):
+    """HTTP 5xx, connection error, or malformed response."""
+
+
+class AeroDataBoxTimeout(AeroDataBoxError):
+    """Request or connection timed out."""
+
+
+def _classify_status(status_code: int) -> type[AeroDataBoxError]:
+    if status_code == 404:
+        return AeroDataBoxNotFound
+    if status_code == 429:
+        return AeroDataBoxRateLimited
+    return AeroDataBoxUnavailable
+
+
 def parse_flight(raw: dict) -> dict:
     """Extract a clean dict from one AeroDataBox flight object."""
     departure = raw.get("departure") or {}
@@ -113,7 +141,11 @@ def parse_departure(raw: dict, origin_iata: str) -> dict | None:
 
 
 def _fetch_departures_window(iata: str, from_local: str, to_local: str) -> list[dict]:
-    """Fetch a single ≤12-hour window of departures. Returns raw dicts."""
+    """Fetch a single ≤12-hour window of departures. Returns raw dicts.
+
+    Raises the appropriate AeroDataBoxError subclass on any failure path;
+    the caller is responsible for partial-success aggregation across windows.
+    """
     url = f"https://aerodatabox.p.rapidapi.com/flights/airports/iata/{iata}/{from_local}/{to_local}"
     headers = {
         "x-rapidapi-host": "aerodatabox.p.rapidapi.com",
@@ -124,32 +156,60 @@ def _fetch_departures_window(iata: str, from_local: str, to_local: str) -> list[
         "withLocation": "false",
         "direction": "Departure",
     }
-    with httpx.Client(timeout=15) as client:
-        response = client.get(url, headers=headers, params=params)
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(url, headers=headers, params=params)
+    except httpx.TimeoutException as e:
+        raise AeroDataBoxTimeout(
+            f"timeout fetching departures for {iata} {from_local}-{to_local}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise AeroDataBoxUnavailable(
+            f"connection error fetching departures for {iata} {from_local}-{to_local}"
+        ) from e
+
     if response.status_code != 200:
-        logger.warning(
-            "AeroDataBox departures API returned status %s for %s (%s → %s)",
-            response.status_code,
-            iata,
-            from_local,
-            to_local,
+        exc_cls = _classify_status(response.status_code)
+        raise exc_cls(
+            f"AeroDataBox departures status {response.status_code} for {iata} {from_local}-{to_local}"
         )
-        return []
-    data = response.json()
-    departures = data.get("departures", [])
+
+    try:
+        data = response.json()
+    except (ValueError, TypeError) as e:
+        raise AeroDataBoxUnavailable(
+            f"malformed JSON from departures for {iata} {from_local}-{to_local}"
+        ) from e
+
+    departures = data.get("departures", []) if isinstance(data, dict) else []
     if not isinstance(departures, list):
         return []
     return departures
+
+
+# Severity ranking used when both departure windows fail — the "worst" error
+# is re-raised so the route handler maps to the most severe status (503
+# vs 404 for rate-limited vs unavailable, etc.).
+_ADB_SEVERITY: dict[type[AeroDataBoxError], int] = {
+    AeroDataBoxUnavailable: 4,
+    AeroDataBoxTimeout: 3,
+    AeroDataBoxRateLimited: 2,
+    AeroDataBoxNotFound: 1,
+}
 
 
 def lookup_airport_departures(iata: str, date_str: str) -> list[dict]:
     """Call AeroDataBox FIDS/Departures endpoint for all departures from an airport on a date.
 
     Splits into two ≤12-hour windows to stay within the API's 12-hour limit.
-    If one window fails, results from the other are still returned.
+    Partial-success semantics preserved: if one window succeeds and the other
+    raises, return the successful window's results and swallow the error with
+    a warning log. Only raises when BOTH windows fail — re-raises the worst
+    exception by severity.
     """
     iata = iata.strip().upper()
     raw_departures: list[dict] = []
+    window_errors: list[AeroDataBoxError] = []
 
     for from_time, to_time in [("T00:00", "T11:59"), ("T12:00", "T23:59")]:
         try:
@@ -157,11 +217,17 @@ def lookup_airport_departures(iata: str, date_str: str) -> list[dict]:
                 iata, f"{date_str}{from_time}", f"{date_str}{to_time}"
             )
             raw_departures.extend(window)
-        except Exception as e:
-            logger.exception(
-                "AeroDataBox departures lookup failed for %s on %s (%s): %s",
-                iata, date_str, from_time, e,
+        except AeroDataBoxError as e:
+            logger.warning(
+                "AeroDataBox departures window failed for %s on %s (%s-%s): %s",
+                iata, date_str, from_time, to_time, type(e).__name__,
             )
+            window_errors.append(e)
+
+    # Both windows failed with nothing recovered → re-raise the worst exception
+    if window_errors and not raw_departures:
+        worst = max(window_errors, key=lambda e: _ADB_SEVERITY.get(type(e), 0))
+        raise worst
 
     parsed = []
     for raw in raw_departures:
@@ -172,34 +238,55 @@ def lookup_airport_departures(iata: str, date_str: str) -> list[dict]:
 
 
 def lookup_flights(flight_number: str, date_str: str) -> list[dict]:
-    """Call AeroDataBox Flight status (specific date) API and return parsed flights."""
+    """Call AeroDataBox Flight status (specific date) API and return parsed flights.
+
+    Raises the appropriate AeroDataBoxError subclass on any failure path:
+        * AeroDataBoxNotFound: upstream returned 404
+        * AeroDataBoxRateLimited: upstream returned 429
+        * AeroDataBoxUnavailable: upstream returned 5xx / connection error / malformed response
+        * AeroDataBoxTimeout: request or connection timed out
+    An upstream 200 with an empty list is returned as ``[]`` (no exception) —
+    that's a legitimate "no flights for this number/date".
+    """
+    flight_number = flight_number.strip()
+    url = f"https://aerodatabox.p.rapidapi.com/flights/number/{flight_number}/{date_str}"
+    headers = {
+        "x-rapidapi-host": "aerodatabox.p.rapidapi.com",
+        "x-rapidapi-key": settings.rapidapi_key,
+    }
+    params = {
+        "withAircraftImage": "false",
+        "withLocation": "false",
+        "dateLocalRole": "Departure",
+    }
     try:
-        flight_number = flight_number.strip()
-        url = f"https://aerodatabox.p.rapidapi.com/flights/number/{flight_number}/{date_str}"
-        headers = {
-            "x-rapidapi-host": "aerodatabox.p.rapidapi.com",
-            "x-rapidapi-key": settings.rapidapi_key,
-        }
-        params = {
-            "withAircraftImage": "false",
-            "withLocation": "false",
-            "dateLocalRole": "Departure",
-        }
         with httpx.Client(timeout=10) as client:
             response = client.get(url, headers=headers, params=params)
-        if response.status_code != 200:
-            logger.warning(
-                "AeroDataBox API returned status %s for %s on %s",
-                response.status_code,
-                flight_number,
-                date_str,
-            )
-            return []
+    except httpx.TimeoutException as e:
+        raise AeroDataBoxTimeout(
+            f"timeout fetching flight {flight_number} on {date_str}"
+        ) from e
+    except httpx.HTTPError as e:
+        raise AeroDataBoxUnavailable(
+            f"connection error fetching flight {flight_number} on {date_str}"
+        ) from e
+
+    if response.status_code != 200:
+        exc_cls = _classify_status(response.status_code)
+        raise exc_cls(
+            f"AeroDataBox status {response.status_code} for {flight_number} on {date_str}"
+        )
+
+    try:
         data = response.json()
-        if not isinstance(data, list):
-            logger.warning("AeroDataBox API returned non-list for %s on %s", flight_number, date_str)
-            return []
-        return [parse_flight(f) for f in data]
-    except Exception as e:
-        logger.exception("AeroDataBox lookup failed for %s on %s: %s", flight_number, date_str, e)
-        return []
+    except (ValueError, TypeError) as e:
+        raise AeroDataBoxUnavailable(
+            f"malformed JSON for {flight_number} on {date_str}"
+        ) from e
+
+    if not isinstance(data, list):
+        raise AeroDataBoxUnavailable(
+            f"unexpected response shape for {flight_number} on {date_str} (expected list)"
+        )
+
+    return [parse_flight(f) for f in data]

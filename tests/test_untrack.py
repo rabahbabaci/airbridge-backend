@@ -86,7 +86,6 @@ class TestUntrackRealDB:
         assert row.projected_timeline is None
         assert row.last_pushed_leave_home_at is None
         assert row.push_count == 0
-        assert row.morning_email_sent_at is None
         assert row.time_to_go_push_sent_at is None
         assert row.sms_count == 0
         assert row.actual_depart_at is None

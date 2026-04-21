@@ -12,6 +12,8 @@ from app.core.errors import UnsupportedModeError
 from app.db import get_db
 from app.db.models import Trip as TripRow, User
 from app.schemas.trips import (
+    EXTRA_TIME_MINUTES_VALUES,
+    ConfidenceProfile,
     FlightNumberTripRequest,
     RouteSearchTripRequest,
     TripContext,
@@ -77,6 +79,11 @@ class UpdateTripRequest(BaseModel):
     transport_mode: str | None = Field(None, max_length=20)
     security_access: str | None = Field(None, max_length=20)
     buffer_preference: int | None = Field(None, ge=0, le=180)
+    bag_count: int | None = Field(None, ge=0, le=10)
+    traveling_with_children: bool | None = None
+    has_boarding_pass: bool | None = None
+    extra_time_minutes: int | None = None
+    confidence_profile: ConfidenceProfile | None = None
 
     @field_validator("flight_number", mode="before")
     @classmethod
@@ -84,6 +91,19 @@ class UpdateTripRequest(BaseModel):
         if v is None:
             return None
         return v.strip().upper()
+
+    @field_validator("extra_time_minutes", mode="before")
+    @classmethod
+    def extra_time_values(cls, v: object) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, int) and v in EXTRA_TIME_MINUTES_VALUES:
+            return v
+        if isinstance(v, str) and v.strip().isdigit():
+            n = int(v.strip())
+            if n in EXTRA_TIME_MINUTES_VALUES:
+                return n
+        raise ValueError("extra_time_minutes must be 0, 15, or 30")
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +335,6 @@ async def untrack_trip(
     row.projected_timeline = None
     row.last_pushed_leave_home_at = None
     row.push_count = 0
-    row.morning_email_sent_at = None
     row.time_to_go_push_sent_at = None
     row.sms_count = 0
     row.actual_depart_at = None
@@ -538,6 +557,21 @@ async def update_trip(
         prefs_changed = True
     if payload.buffer_preference is not None:
         prefs["gate_time_minutes"] = payload.buffer_preference
+        prefs_changed = True
+    if payload.bag_count is not None:
+        prefs["bag_count"] = payload.bag_count
+        prefs_changed = True
+    if payload.traveling_with_children is not None:
+        prefs["traveling_with_children"] = payload.traveling_with_children
+        prefs_changed = True
+    if payload.has_boarding_pass is not None:
+        prefs["has_boarding_pass"] = payload.has_boarding_pass
+        prefs_changed = True
+    if payload.extra_time_minutes is not None:
+        prefs["extra_time_minutes"] = payload.extra_time_minutes
+        prefs_changed = True
+    if payload.confidence_profile is not None:
+        prefs["confidence_profile"] = payload.confidence_profile.value
         prefs_changed = True
     if prefs_changed:
         row.preferences_json = _json.dumps(prefs)
