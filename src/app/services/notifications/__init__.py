@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 LEAVE_BY_SHIFT = "leave_by_shift"
 FLIGHT_DELAY = "flight_delay"
 GATE_CHANGE = "gate_change"
+CANCELLATION = "cancellation"
 TIME_TO_GO = "time_to_go"
 POST_TRIP = "post_trip"
 
@@ -23,6 +24,7 @@ MAX_PUSHES_PER_TRIP = 5
 _INTERRUPTION_LEVELS = {
     LEAVE_BY_SHIFT: "time-sensitive",
     FLIGHT_DELAY: "time-sensitive",
+    CANCELLATION: "time-sensitive",
     TIME_TO_GO: "time-sensitive",
     GATE_CHANGE: "active",
     POST_TRIP: "active",

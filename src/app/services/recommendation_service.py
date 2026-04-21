@@ -45,6 +45,31 @@ GATE_BUFFER_MINUTES: dict[ConfidenceProfile, int] = {
 }
 
 
+def build_latest_recommendation_jsonb(response) -> dict:
+    """Marshal a RecommendationResponse into the latest_recommendation JSONB shape.
+
+    Stored on the trip row by the track endpoint and the polling agent so the
+    Active Trip Screen can render segments + map coordinates without a round-trip
+    to /v1/recommendations.
+    """
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    segments = [
+        {
+            "id": seg.id,
+            "label": seg.label,
+            "duration_minutes": seg.duration_minutes,
+            "advice": seg.advice,
+        }
+        for seg in (response.segments or [])
+    ]
+    return {
+        "segments": segments,
+        "home_coordinates": response.home_coordinates,
+        "terminal_coordinates": response.terminal_coordinates,
+        "computed_at": now_iso,
+    }
+
+
 def _effective_context(
     context: TripContext, overrides: TripPreferenceOverrides | None
 ) -> TripContext:
@@ -420,10 +445,19 @@ async def compute_recommendation(
 async def recompute_recommendation(
     payload: RecommendationRecomputeRequest,
     user=None,
+    *,
+    prefetched_snapshot: FlightSnapshot | None = None,
 ) -> RecommendationResponse | None:
     """
     Recompute recommendation; uses preference_overrides when provided.
     Returns None if trip_id is not found.
+
+    ``prefetched_snapshot`` lets callers (the polling agent) skip the ADB call
+    when a valid FlightSnapshot has already been reconstructed from the
+    persisted flight_info/flight_status columns. Trip-level overrides
+    (flight_number / departure_date / selected_departure_utc) force the fresh
+    build_flight_snapshot path even if a prefetched snapshot is passed —
+    edit-mode preview can't trust the stored snapshot.
     """
     context = await get_trip_context(payload.trip_id)
     if context is None:
@@ -439,7 +473,11 @@ async def recompute_recommendation(
         trip_updates["selected_departure_utc"] = payload.selected_departure_utc
     if trip_updates:
         context = context.model_copy(update=trip_updates)
-    snapshot = build_flight_snapshot(context)
+        # Edit-mode preview: stored flight_info is for the saved flight, not the
+        # hypothetical one being previewed. Force fresh ADB path.
+        prefetched_snapshot = None
+
+    snapshot = prefetched_snapshot or build_flight_snapshot(context)
     now = datetime.now(tz=timezone.utc)
     response = await _build_response(payload.trip_id, context, snapshot, now, user=user)
     if payload.reason:

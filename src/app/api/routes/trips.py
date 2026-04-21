@@ -20,6 +20,56 @@ from app.schemas.trips import (
 from app.services.trip_intake import process_trip_intake
 
 
+class FlightInfo(BaseModel):
+    airline: str | None = None
+    flight_number: str | None = None
+    origin_iata: str | None = None
+    destination_iata: str | None = None
+    scheduled_departure_at: str | None = None
+    scheduled_arrival_at: str | None = None
+    aircraft_type: str | None = None
+    terminal: str | None = None
+    duration_minutes: int | None = None
+    snapshot_taken_at: str | None = None
+
+
+class FlightStatus(BaseModel):
+    gate: str | None = None
+    status: str | None = None
+    delay_minutes: int = 0
+    actual_departure_at: str | None = None
+    cancelled: bool = False
+    last_updated_at: str | None = None
+
+
+class TrackTripResponse(BaseModel):
+    status: str
+    trip_id: str
+    trip_count: int = 0
+    flight_info: FlightInfo | None = None
+    flight_status: FlightStatus | None = None
+
+
+class TripDetailResponse(BaseModel):
+    """Shape returned by GET /v1/trips/{id}. Carries everything the Active Trip
+    Screen needs so it can render from one round-trip (Phase 3 Option B)."""
+
+    trip_id: str
+    flight_number: str | None = None
+    departure_date: str | None = None
+    home_address: str | None = None
+    status: str
+    selected_departure_utc: str | None = None
+    preferences_json: str | None = None
+    origin_iata: str | None = None
+    destination_iata: str | None = None
+    airline: str | None = None
+    projected_timeline: dict | None = None
+    flight_info: dict | None = None
+    flight_status: dict | None = None
+    latest_recommendation: dict | None = None
+
+
 class UpdateTripRequest(BaseModel):
     home_address: str | None = Field(None, max_length=500)
     flight_number: str | None = Field(None, max_length=10)
@@ -133,7 +183,7 @@ async def post_trip(
     return ctx
 
 
-@router.post("/{trip_id}/track")
+@router.post("/{trip_id}/track", response_model=TrackTripResponse)
 async def track_trip(
     trip_id: str,
     user: User = Depends(get_required_user),
@@ -170,10 +220,14 @@ async def track_trip(
         row.trip_status = "active"
         user.trip_count = (user.trip_count or 0) + 1
 
-        # Compute initial projected_timeline
+        # Compute initial projected_timeline. This also warms the flight_snapshot_service
+        # cache with the raw AeroDataBox response, which get_selected_flight reuses below.
         try:
             from app.schemas.recommendations import RecommendationRequest
-            from app.services.recommendation_service import compute_recommendation
+            from app.services.recommendation_service import (
+                build_latest_recommendation_jsonb,
+                compute_recommendation,
+            )
 
             rec_response = await compute_recommendation(
                 RecommendationRequest(trip_id=trip_id), user=user
@@ -181,32 +235,45 @@ async def track_trip(
             timeline = _build_projected_timeline(rec_response, row.selected_departure_utc)
             if timeline:
                 row.projected_timeline = timeline
+            if rec_response is not None:
+                row.latest_recommendation = build_latest_recommendation_jsonb(rec_response)
         except Exception:
             logger.exception("Failed to compute projected_timeline on track for trip %s", trip_id)
 
-        # Populate flight route columns for history enrichment
+        # Persist frozen flight_info + initial flight_status from the cached ADB response.
+        # flight_info is the source of truth on conflict; origin_iata/destination_iata/airline
+        # are denormalized scalars for fast history queries only — never read them without
+        # checking flight_info first.
         if row.input_mode == "flight_number" and row.flight_number:
             try:
-                from app.services.flight_snapshot_service import get_available_flights
+                from app.services.flight_snapshot_service import (
+                    build_flight_info_and_status,
+                    get_selected_flight,
+                )
 
-                flights = get_available_flights(row.flight_number, row.departure_date)
-                if flights:
-                    selected_utc = (row.selected_departure_utc or "").strip()
-                    if selected_utc:
-                        flight = next(
-                            (f for f in flights if (f.get("departure_time_utc") or "").strip() == selected_utc),
-                            flights[0],
-                        )
-                    else:
-                        flight = flights[0]
-                    row.origin_iata = flight.get("origin_iata")
-                    row.destination_iata = flight.get("destination_iata")
-                    row.airline = flight.get("airline_name")
+                flight = get_selected_flight(
+                    row.flight_number,
+                    row.departure_date,
+                    row.selected_departure_utc,
+                )
+                flight_info, flight_status = build_flight_info_and_status(flight)
+                if flight_info:
+                    row.flight_info = flight_info
+                    row.flight_status = flight_status
+                    row.origin_iata = flight_info.get("origin_iata")
+                    row.destination_iata = flight_info.get("destination_iata")
+                    row.airline = flight_info.get("airline")
             except Exception:
-                logger.exception("Failed to populate flight route for trip %s", trip_id)
+                logger.exception("Failed to populate flight_info for trip %s", trip_id)
 
         await db.commit()
-        return {"status": "tracked", "trip_id": trip_id, "trip_count": user.trip_count}
+        return {
+            "status": "tracked",
+            "trip_id": trip_id,
+            "trip_count": user.trip_count,
+            "flight_info": row.flight_info,
+            "flight_status": row.flight_status,
+        }
 
     raise HTTPException(status_code=400, detail=f"Cannot track trip in status {current}")
 
@@ -495,7 +562,7 @@ async def update_trip(
     return {"status": "updated", "trip_id": trip_id}
 
 
-@router.get("/{trip_id}")
+@router.get("/{trip_id}", response_model=TripDetailResponse)
 async def get_trip(
     trip_id: str,
     user: User = Depends(get_required_user),
@@ -521,4 +588,13 @@ async def get_trip(
         "status": row.trip_status,
         "selected_departure_utc": row.selected_departure_utc,
         "preferences_json": row.preferences_json,
+        "origin_iata": row.origin_iata,
+        "destination_iata": row.destination_iata,
+        "airline": row.airline,
+        "projected_timeline": row.projected_timeline,
+        "flight_info": row.flight_info,
+        "flight_status": row.flight_status,
+        "latest_recommendation": row.latest_recommendation,
     }
+
+

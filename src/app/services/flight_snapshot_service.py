@@ -9,7 +9,10 @@ from app.schemas.flight_snapshot import FlightSnapshot
 from app.schemas.trips import TripContext
 from app.services.integrations.aerodatabox import lookup_flights
 
-# In-memory cache: "flight_number|date" -> list of flight dicts
+# In-memory cache: "flight_number|date" -> list of flight dicts.
+# Scope after Phase 2: track-time dedup only. The polling agent no longer routes through
+# build_flight_snapshot; it reads flight_info/flight_status columns and uses
+# refresh_flight_status for live updates. Entries here live until process restart.
 _flight_cache: dict[str, list[dict]] = {}
 _FLIGHT_CACHE_MAX = 1000
 
@@ -17,6 +20,149 @@ _FLIGHT_CACHE_MAX = 1000
 def get_available_flights(flight_number: str, date_str: str) -> list[dict]:
     """Return list of flight options from AeroDataBox for the given flight number and date."""
     return lookup_flights(flight_number, date_str)
+
+
+def _select_flight(flights: list[dict], selected_utc: str | None) -> dict | None:
+    """Pick the flight whose departure_time_utc matches selected_utc; fall back to first."""
+    if not flights:
+        return None
+    selected_utc = (selected_utc or "").strip()
+    if selected_utc:
+        return next(
+            (
+                f
+                for f in flights
+                if (f.get("departure_time_utc") or "").strip() == selected_utc
+            ),
+            flights[0],
+        )
+    return flights[0]
+
+
+def get_selected_flight(
+    flight_number: str, date_str: str, selected_utc: str | None
+) -> dict | None:
+    """Return the single ADB flight dict matching selected_utc.
+
+    Hits the module-level ``_flight_cache`` populated by ``build_flight_snapshot``
+    to avoid a redundant AeroDataBox call when track has already computed a
+    recommendation. Calls ``lookup_flights`` only on cache miss.
+    """
+    cache_key = f"{flight_number}|{date_str}"
+    flights = _flight_cache.get(cache_key)
+    if flights is None:
+        flights = lookup_flights(flight_number, date_str)
+        if flights:
+            if len(_flight_cache) >= _FLIGHT_CACHE_MAX:
+                oldest_key = next(iter(_flight_cache))
+                del _flight_cache[oldest_key]
+            _flight_cache[cache_key] = flights
+    return _select_flight(flights, selected_utc)
+
+
+def _iso_utc(s: str | None) -> str | None:
+    """Normalize an ADB UTC string (e.g. '2026-04-10 14:00Z') to ISO 8601 with +00:00."""
+    dt = _parse_utc_datetime(s)
+    return dt.isoformat() if dt else None
+
+
+def build_flight_info_and_status(flight: dict | None) -> tuple[dict | None, dict | None]:
+    """Convert a raw AeroDataBox flight dict into the (flight_info, flight_status) pair.
+
+    ``flight_info`` is the frozen-at-track-time record (schedule, route, aircraft, terminal).
+    ``flight_status`` is the live record (gate, status, delay) updated by the polling agent.
+
+    Returns (None, None) for a None/empty input.
+    """
+    if not flight:
+        return None, None
+
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+    scheduled_dep_dt = _parse_utc_datetime(flight.get("departure_time_utc"))
+    scheduled_arr_dt = _parse_utc_datetime(flight.get("arrival_time_utc"))
+    duration_minutes = None
+    if scheduled_dep_dt and scheduled_arr_dt:
+        duration_minutes = int(
+            (scheduled_arr_dt - scheduled_dep_dt).total_seconds() // 60
+        )
+
+    # departure_local_hour is needed by recommendation_service for TSA bucket selection.
+    # Prefer the local-time string from ADB; fall back to UTC hour when local is missing.
+    local_hour = _extract_local_hour(flight.get("departure_time_local"))
+    if local_hour is None and scheduled_dep_dt is not None:
+        local_hour = scheduled_dep_dt.hour
+
+    flight_info = {
+        "airline": flight.get("airline_name"),
+        "flight_number": flight.get("flight_number"),
+        "origin_iata": flight.get("origin_iata"),
+        "destination_iata": flight.get("destination_iata"),
+        "destination_name": flight.get("destination_name"),
+        "scheduled_departure_at": scheduled_dep_dt.isoformat() if scheduled_dep_dt else None,
+        "scheduled_departure_local": flight.get("departure_time_local"),
+        "scheduled_arrival_at": scheduled_arr_dt.isoformat() if scheduled_arr_dt else None,
+        "aircraft_type": flight.get("aircraft_model"),
+        "terminal": flight.get("departure_terminal"),
+        "duration_minutes": duration_minutes,
+        "departure_local_hour": local_hour,
+        "snapshot_taken_at": now_iso,
+    }
+
+    revised_dt = _parse_utc_datetime(flight.get("revised_departure_utc"))
+    delay_minutes = 0
+    actual_departure_at = None
+    if revised_dt and scheduled_dep_dt and revised_dt > scheduled_dep_dt:
+        delay_minutes = int((revised_dt - scheduled_dep_dt).total_seconds() // 60)
+        actual_departure_at = revised_dt.isoformat()
+
+    status_value = flight.get("status")
+    flight_status = {
+        "gate": flight.get("departure_gate"),
+        "status": status_value,
+        "delay_minutes": delay_minutes,
+        "actual_departure_at": actual_departure_at,
+        "cancelled": status_value == "Cancelled",
+        "last_updated_at": now_iso,
+    }
+
+    return flight_info, flight_status
+
+
+def snapshot_from_columns(
+    flight_info: dict | None, flight_status: dict | None
+) -> FlightSnapshot | None:
+    """Reconstruct the in-memory FlightSnapshot from persisted columns.
+
+    ``flight_info`` supplies frozen fields (schedule, terminal, origin, local hour).
+    ``flight_status`` supplies the live ``departure_gate``. Either being None/missing
+    returns None; a missing flight_status just means the gate is unknown.
+
+    Returns None when flight_info lacks a parseable scheduled_departure_at or
+    origin_iata — the caller should fall back to the fresh-ADB path.
+    """
+    if not flight_info:
+        return None
+
+    scheduled_dep = _parse_utc_datetime(flight_info.get("scheduled_departure_at"))
+    if scheduled_dep is None:
+        return None
+
+    origin_iata = flight_info.get("origin_iata")
+    if not origin_iata:
+        return None
+
+    departure_gate = None
+    if flight_status and isinstance(flight_status, dict):
+        departure_gate = flight_status.get("gate")
+
+    return FlightSnapshot(
+        scheduled_departure=scheduled_dep,
+        departure_terminal=flight_info.get("terminal"),
+        departure_gate=departure_gate,
+        origin_airport_code=origin_iata,
+        departure_local_hour=flight_info.get("departure_local_hour"),
+    )
 
 
 def _parse_utc_datetime(s: str | None) -> datetime | None:
