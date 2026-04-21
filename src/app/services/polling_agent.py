@@ -18,7 +18,7 @@ from app.services.flight_snapshot_service import (
     build_flight_info_and_status,
     snapshot_from_columns,
 )
-from app.services.integrations.aerodatabox import lookup_flights
+from app.services.integrations.aerodatabox import AeroDataBoxError, lookup_flights
 from app.services.notifications import (
     CANCELLATION,
     GATE_CHANGE,
@@ -194,6 +194,12 @@ async def refresh_flight_status(trip_row, session) -> tuple[bool, dict]:
 
     try:
         flights = lookup_flights(flight_number, str(departure_date))
+    except AeroDataBoxError as e:
+        logger.warning(
+            "refresh_flight_status skipped (trip %s): %s",
+            trip_row.id, type(e).__name__,
+        )
+        return (False, {})
     except Exception:
         logger.exception(
             "refresh_flight_status: lookup_flights raised for trip %s", trip_row.id

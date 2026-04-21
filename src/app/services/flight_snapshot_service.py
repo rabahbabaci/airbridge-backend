@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 from app.schemas.flight_snapshot import FlightSnapshot
 from app.schemas.trips import TripContext
-from app.services.integrations.aerodatabox import lookup_flights
+from app.services.integrations.aerodatabox import AeroDataBoxError, lookup_flights
 
 # In-memory cache: "flight_number|date" -> list of flight dicts.
 # Scope after Phase 2: track-time dedup only. The polling agent no longer routes through
@@ -208,7 +208,28 @@ def _build_fallback_snapshot(
     )
 
 
-def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
+def build_flight_snapshot(
+    trip_context: TripContext, *, strict: bool = False
+) -> FlightSnapshot:
+    """Build a FlightSnapshot from the trip context.
+
+    ``strict`` controls behavior when the AeroDataBox lookup fails:
+    * strict=False (default): swallow ``AeroDataBoxError`` and return a
+      deterministic fallback snapshot. Safe for background/polling paths
+      where we must not crash the caller.
+    * strict=True: re-raise ``AeroDataBoxError`` so the caller (a user-
+      initiated recommendation route) can translate it to an HTTP 503.
+      Prevents showing the user a lying 10 AM UTC fallback recommendation
+      during an upstream outage.
+
+    Hybrid exception handling: genuinely unexpected exceptions (parse
+    crashes, downstream code bugs, etc.) still fall back in *both* modes.
+    ``strict`` only controls typed ``AeroDataBoxError`` subclasses.
+    Leave this hybrid intact — narrowing strict mode to all-exceptions
+    has been considered and rejected because parse-path crashes are
+    orthogonal to upstream availability and should degrade gracefully
+    regardless of mode.
+    """
     airport_code = (
         trip_context.origin_airport if trip_context.input_mode == "route_search" else None
     )
@@ -218,9 +239,18 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
             if cache_key in _flight_cache:
                 flights = _flight_cache[cache_key]
             else:
-                flights = lookup_flights(
-                    trip_context.flight_number, str(trip_context.departure_date)
-                )
+                try:
+                    flights = lookup_flights(
+                        trip_context.flight_number, str(trip_context.departure_date)
+                    )
+                except AeroDataBoxError as e:
+                    if strict:
+                        raise
+                    logger.warning(
+                        "build_flight_snapshot fell back due to %s",
+                        type(e).__name__,
+                    )
+                    return _build_fallback_snapshot(trip_context, airport_code)
                 if flights:
                     if len(_flight_cache) >= _FLIGHT_CACHE_MAX:
                         oldest_key = next(iter(_flight_cache))
@@ -277,6 +307,10 @@ def build_flight_snapshot(trip_context: TripContext) -> FlightSnapshot:
                         departure_local_hour=local_hour,
                     )
         return _build_fallback_snapshot(trip_context, airport_code)
+    except AeroDataBoxError:
+        # strict=True re-raised from the inner handler above. Escape the
+        # outer except Exception so the route handler can translate to 503.
+        raise
     except Exception as e:
         logger.debug("flight_snapshot error: %s", e)
         return _build_fallback_snapshot(trip_context, airport_code)

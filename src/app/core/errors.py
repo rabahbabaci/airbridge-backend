@@ -8,12 +8,18 @@ class AppError(Exception):
     """Base application error with a structured JSON body."""
 
     def __init__(
-        self, code: str, message: str, details: Any = None, status_code: int = 400
+        self,
+        code: str,
+        message: str,
+        details: Any = None,
+        status_code: int = 400,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.code = code
         self.message = message
         self.details = details
         self.status_code = status_code
+        self.headers = headers
         super().__init__(message)
 
 
@@ -23,6 +29,29 @@ class UnsupportedModeError(AppError):
             code="UNSUPPORTED_MODE",
             message=f"input_mode '{mode}' is not supported. Use 'flight_number' or 'route_search'.",
             status_code=422,
+        )
+
+
+class UpstreamUnavailableError(AppError):
+    """Flight-data upstream (AeroDataBox) is unreachable or erroring."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="UPSTREAM_UNAVAILABLE",
+            message="Flight data temporarily unavailable. Please try again in a moment.",
+            status_code=503,
+        )
+
+
+class UpstreamRateLimitedError(AppError):
+    """Flight-data upstream is rate-limiting our requests. Retry-After: 60."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="UPSTREAM_RATE_LIMITED",
+            message="Flight data service is rate limited. Please try again in a moment.",
+            status_code=503,
+            headers={"Retry-After": "60"},
         )
 
 
@@ -37,6 +66,7 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
     return JSONResponse(
         status_code=exc.status_code,
         content=_error_body(exc.code, exc.message, exc.details),
+        headers=exc.headers,
     )
 
 

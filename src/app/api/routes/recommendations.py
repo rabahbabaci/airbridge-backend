@@ -6,12 +6,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
 from app.api.middleware.auth import get_optional_user
+from app.core.errors import (
+    AppError,
+    UpstreamRateLimitedError,
+    UpstreamUnavailableError,
+)
 from app.db import get_db
 from app.db.models import Trip as TripRow, User
 from app.schemas.recommendations import (
     RecommendationRecomputeRequest,
     RecommendationRequest,
     RecommendationResponse,
+)
+from app.services.integrations.aerodatabox import (
+    AeroDataBoxError,
+    AeroDataBoxRateLimited,
 )
 from app.services.recommendation_service import (
     compute_recommendation,
@@ -23,13 +32,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
 
+def _translate_upstream(exc: AeroDataBoxError) -> AppError:
+    """Translate an integration-layer exception to an HTTP-layer AppError.
+
+    Recommendation routes don't distinguish NotFound from other upstream
+    failures — if we got this far, we've already confirmed the trip exists
+    in our DB, so a 404 from ADB for the flight is still a 503 to the user
+    (the upstream can't serve us data about a flight we know exists).
+    """
+    if isinstance(exc, AeroDataBoxRateLimited):
+        return UpstreamRateLimitedError()
+    return UpstreamUnavailableError()
+
+
 @router.post("", response_model=RecommendationResponse, status_code=200)
 async def post_recommendation(
     payload: RecommendationRequest,
     user: User | None = Depends(get_optional_user),
 ) -> RecommendationResponse:
     """Compute a leave-home recommendation for the given trip."""
-    response = await compute_recommendation(payload, user=user)
+    try:
+        response = await compute_recommendation(payload, user=user, strict=True)
+    except AeroDataBoxError as e:
+        raise _translate_upstream(e) from e
     if response is None:
         raise HTTPException(status_code=404, detail="Trip not found")
     return response
@@ -53,7 +78,10 @@ async def post_recommendation_recompute(
         except Exception:
             logger.exception("Failed to persist home_address for trip %s", payload.trip_id)
 
-    response = await recompute_recommendation(payload, user=user)
+    try:
+        response = await recompute_recommendation(payload, user=user, strict=True)
+    except AeroDataBoxError as e:
+        raise _translate_upstream(e) from e
     if response is None:
         raise HTTPException(status_code=404, detail="Trip not found")
 

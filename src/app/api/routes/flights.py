@@ -2,13 +2,50 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.core.errors import (
+    AppError,
+    UpstreamRateLimitedError,
+    UpstreamUnavailableError,
+)
 from app.services.flight_snapshot_service import get_available_flights
-from app.services.integrations.aerodatabox import lookup_airport_departures
+from app.services.integrations.aerodatabox import (
+    AeroDataBoxError,
+    AeroDataBoxNotFound,
+    AeroDataBoxRateLimited,
+    lookup_airport_departures,
+)
 from app.services.integrations.google_maps import get_drive_time
 from app.services.integrations.airport_defaults import get_airport_timings
 from app.services.integrations.tsa_model import estimate_tsa_wait
 
 router = APIRouter(prefix="/flights", tags=["flights"])
+
+
+def _translate_flights_upstream(
+    exc: AeroDataBoxError,
+) -> HTTPException | AppError:
+    """Translate for the /flights/{n}/{date} endpoint: NotFound → 404,
+    RateLimited → 503 with Retry-After, everything else → 503.
+    """
+    if isinstance(exc, AeroDataBoxNotFound):
+        return HTTPException(
+            status_code=404,
+            detail="No flights found for this flight number and date",
+        )
+    if isinstance(exc, AeroDataBoxRateLimited):
+        return UpstreamRateLimitedError()
+    return UpstreamUnavailableError()
+
+
+def _translate_search_upstream(exc: AeroDataBoxError) -> AppError:
+    """Translate for /flights/search: NotFound is never raised here (legit
+    empty-day is an empty list, not a 404 from ADB; if ADB does return 404
+    it's effectively "airport unknown" which is an upstream problem). So
+    NotFound is treated the same as Unavailable — both map to 503.
+    """
+    if isinstance(exc, AeroDataBoxRateLimited):
+        return UpstreamRateLimitedError()
+    return UpstreamUnavailableError()
 
 DEPARTED_STATUSES = {"departed", "landed", "arrived"}
 BOARDING_STATUSES = {"boarding"}
@@ -170,8 +207,13 @@ async def get_flights(
     date: str,
     home_address: str = Query(default=""),
 ):
-    result = get_available_flights(flight_number, date)
+    try:
+        result = get_available_flights(flight_number, date)
+    except AeroDataBoxError as e:
+        raise _translate_flights_upstream(e) from e
+
     if not result:
+        # Upstream returned 200 with an empty list — legitimate zero-match.
         raise HTTPException(status_code=404, detail="No flights found for this flight number and date")
 
     enriched = await enrich_flights(result, home_address)
@@ -241,8 +283,13 @@ async def search_flights(
     airline: str | None = Query(default=None),
     home_address: str = Query(default=""),
 ):
-    departures = lookup_airport_departures(origin, date)
+    try:
+        departures = lookup_airport_departures(origin, date)
+    except AeroDataBoxError as e:
+        raise _translate_search_upstream(e) from e
+
     if not departures:
+        # Upstream OK but zero departures — legitimate empty-day result.
         return {"flights": []}
 
     # Filter by destination
