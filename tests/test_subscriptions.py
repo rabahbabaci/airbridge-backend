@@ -310,17 +310,64 @@ class TestPortal:
         assert resp.status_code == 401
 
     @patch("app.api.routes.subscriptions.settings")
-    def test_no_stripe_customer_returns_400(self, mock_settings, authed_client):
+    def test_portal_404_when_no_stripe_customer_id(self, mock_settings, authed_client):
+        """User with subscription_status=active but stripe_customer_id=None
+        (common in dev SQL-faked Pro state) gets a 404, not a generic 503."""
         mock_settings.stripe_secret_key = "sk_test_123"
         client, _ = authed_client
         resp = client.post("/v1/subscriptions/portal")
-        assert resp.status_code == 400
-        assert resp.json()["code"] == "NO_SUBSCRIPTION"
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["detail"] == "no_stripe_customer"
+        assert "no active stripe subscription" in body["message"].lower()
+
+    @patch("app.api.routes.subscriptions.stripe")
+    @patch("app.api.routes.subscriptions.settings")
+    def test_portal_404_when_stripe_customer_deleted(self, mock_settings, mock_stripe, pro_client):
+        """Stripe customer was deleted out-of-band; DB still has a stale ID.
+        Stripe raises InvalidRequestError('No such customer') — surface as
+        the same 404 shape as the null-ID case."""
+        mock_settings.stripe_secret_key = "sk_test_123"
+        mock_stripe.error.InvalidRequestError = type("InvalidRequestError", (Exception,), {})
+        mock_stripe.error.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        mock_stripe.error.StripeError = type("StripeError", (Exception,), {})
+
+        err = mock_stripe.error.InvalidRequestError("No such customer: 'cus_deadbeef'")
+        err.code = "resource_missing"
+        mock_stripe.billing_portal.Session.create.side_effect = err
+
+        client, _ = pro_client
+        resp = client.post("/v1/subscriptions/portal")
+        assert resp.status_code == 404
+        body = resp.json()
+        assert body["detail"] == "no_stripe_customer"
+
+    @patch("app.api.routes.subscriptions.stripe")
+    @patch("app.api.routes.subscriptions.settings")
+    def test_portal_503_on_other_stripe_errors(self, mock_settings, mock_stripe, pro_client):
+        """Regression guard: non-missing-customer Stripe failures still return 503
+        (not 404), so the frontend shows the generic retry message rather than
+        a misleading 'no subscription' message."""
+        mock_settings.stripe_secret_key = "sk_test_123"
+        mock_stripe.error.InvalidRequestError = type("InvalidRequestError", (Exception,), {})
+        mock_stripe.error.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        mock_stripe.error.StripeError = type("StripeError", (Exception,), {})
+
+        mock_stripe.billing_portal.Session.create.side_effect = mock_stripe.error.StripeError("Stripe down")
+
+        client, _ = pro_client
+        resp = client.post("/v1/subscriptions/portal")
+        assert resp.status_code == 503
+        assert resp.json()["code"] == "STRIPE_ERROR"
 
     @patch("app.api.routes.subscriptions.stripe")
     @patch("app.api.routes.subscriptions.settings")
     def test_portal_creates_session(self, mock_settings, mock_stripe, pro_client):
         mock_settings.stripe_secret_key = "sk_test_123"
+        mock_stripe.error.InvalidRequestError = type("InvalidRequestError", (Exception,), {})
+        mock_stripe.error.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        mock_stripe.error.StripeError = type("StripeError", (Exception,), {})
+
         mock_session = MagicMock()
         mock_session.url = "https://billing.stripe.com/portal123"
         mock_stripe.billing_portal.Session.create.return_value = mock_session

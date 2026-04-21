@@ -159,17 +159,49 @@ async def get_subscription_status(user=Depends(get_required_user)):
     }
 
 
+_NO_STRIPE_CUSTOMER_BODY = {
+    "detail": "no_stripe_customer",
+    "message": "No active Stripe subscription found for this account.",
+}
+
+
 @router.post("/portal")
 async def create_portal_session(user=Depends(get_required_user)):
-    """Create a Stripe Customer Portal session for managing subscription."""
+    """Create a Stripe Customer Portal session for managing subscription.
+
+    Error differentiation (see frontend Settings for matching UX copy):
+      404 no_stripe_customer — user.stripe_customer_id is null, or Stripe
+                               says the customer no longer exists
+      504 stripe_timeout     — Stripe API connection timed out
+      503 stripe_error       — any other Stripe failure
+    """
     if not settings.stripe_secret_key:
         return JSONResponse(status_code=503, content={"code": "STRIPE_NOT_CONFIGURED", "message": "Stripe is not configured"})
 
     if not user.stripe_customer_id:
-        return JSONResponse(status_code=400, content={"code": "NO_SUBSCRIPTION", "message": "No Stripe customer found. Subscribe first."})
+        return JSONResponse(status_code=404, content=_NO_STRIPE_CUSTOMER_BODY)
 
     stripe.api_key = settings.stripe_secret_key
-    session = stripe.billing_portal.Session.create(
-        customer=user.stripe_customer_id,
-    )
+
+    try:
+        session = stripe.billing_portal.Session.create(
+            customer=user.stripe_customer_id,
+        )
+    except stripe.error.InvalidRequestError as e:
+        # Stripe returns "No such customer: 'cus_xxx'" (code=resource_missing)
+        # when the customer was deleted in Stripe but the DB still has a
+        # stale ID. Surface as the same 404 shape as the null-ID case so
+        # the frontend can show one consistent message.
+        if getattr(e, "code", None) == "resource_missing" or "no such customer" in str(e).lower():
+            logger.info("Stripe customer %s missing for user %s; returning 404", user.stripe_customer_id, user.id)
+            return JSONResponse(status_code=404, content=_NO_STRIPE_CUSTOMER_BODY)
+        logger.exception("Stripe InvalidRequestError opening portal for user %s", user.id)
+        return JSONResponse(status_code=503, content={"code": "STRIPE_ERROR", "message": "Couldn't open the billing portal. Please try again."})
+    except stripe.error.APIConnectionError:
+        logger.warning("Stripe API connection timeout opening portal for user %s", user.id)
+        return JSONResponse(status_code=504, content={"code": "STRIPE_TIMEOUT", "message": "Stripe is taking too long. Please try again."})
+    except stripe.error.StripeError:
+        logger.exception("Stripe error opening portal for user %s", user.id)
+        return JSONResponse(status_code=503, content={"code": "STRIPE_ERROR", "message": "Couldn't open the billing portal. Please try again."})
+
     return {"portal_url": session.url}
