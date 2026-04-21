@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 
 # Ensure src/ is on the path so `app` is importable without installation
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Also put project root on sys.path so scripts/*.py are importable as `scripts.<name>`
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Load test environment BEFORE any app imports
 test_env_path = Path(__file__).parent.parent / ".env.test"

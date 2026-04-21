@@ -13,7 +13,15 @@ from datetime import timedelta
 
 from app.db.models import Event, Trip, User
 from app.schemas.recommendations import RecommendationRecomputeRequest
+from app.services.flight_snapshot_service import (
+    _select_flight,
+    build_flight_info_and_status,
+    snapshot_from_columns,
+)
+from app.services.integrations.aerodatabox import lookup_flights
 from app.services.notifications import (
+    CANCELLATION,
+    GATE_CHANGE,
     LEAVE_BY_SHIFT,
     POST_TRIP,
     TIME_TO_GO,
@@ -22,7 +30,10 @@ from app.services.notifications import (
     should_notify_leave_by_shift,
 )
 from app.services.integrations.airport_defaults import AIRPORT_TIMEZONES
-from app.services.recommendation_service import recompute_recommendation
+from app.services.recommendation_service import (
+    build_latest_recommendation_jsonb,
+    recompute_recommendation,
+)
 from app.services.trip_state import (
     MONITORABLE_STATUSES,
     advance_status,
@@ -113,6 +124,154 @@ def _format_local_time(utc_dt: datetime, airport_iata: str | None) -> str:
 
 
 INTERACTION_SIGNALS = {"timetogo_tap", "rideshare_tap", "nav_tap"}
+
+# Phase B thresholds — skip ADB refresh when the trip is far out, status is
+# stable, and last_updated_at is within one polling interval. Final 30 minutes
+# force a refresh regardless (handled implicitly by the >6h check failing).
+PATH_B_MIN_SECONDS_TO_DEPARTURE = 6 * 3600
+PATH_B_STABLE_STATUSES = {"scheduled", "expected"}
+# Tracked flight_status fields (excluding last_updated_at / actual_departure_at)
+TRACKED_STATUS_FIELDS = ("gate", "status", "delay_minutes", "cancelled")
+
+
+def _parse_iso_utc(s: str | None) -> datetime | None:
+    """Parse an ISO-8601 UTC string into a tz-aware datetime, or None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _should_skip_refresh(trip_row, secs_to_dep: float | None, now: datetime) -> bool:
+    """Return True if we can safely skip the ADB refresh this tick (Path B).
+
+    Path B conditions (all must hold):
+      * seconds_to_departure > 6 hours
+      * flight_status.status is stable ("scheduled"/"expected", case-insensitive)
+      * flight_status.cancelled is False
+      * flight_status.last_updated_at is within this trip's polling interval
+    Otherwise Path A (ADB refresh).
+    """
+    if secs_to_dep is None or secs_to_dep <= PATH_B_MIN_SECONDS_TO_DEPARTURE:
+        return False
+    fs = getattr(trip_row, "flight_status", None)
+    if not isinstance(fs, dict):
+        return False
+    if fs.get("cancelled"):
+        return False
+    status = (fs.get("status") or "").strip().lower()
+    if status not in PATH_B_STABLE_STATUSES:
+        return False
+    last_updated = _parse_iso_utc(fs.get("last_updated_at"))
+    if last_updated is None:
+        return False
+    age = (now - last_updated).total_seconds()
+    return age < _get_poll_interval(secs_to_dep)
+
+
+async def refresh_flight_status(trip_row, session) -> tuple[bool, dict]:
+    """Path A: fetch live ADB data and update flight_status on the trip row.
+
+    Returns ``(was_called, changes)`` where ``was_called`` is True iff a live
+    ADB response was successfully parsed into a new flight_status. ``changes``
+    is ``{field: (old, new)}`` for any tracked field that moved
+    (gate / status / delay_minutes / cancelled / terminal).
+
+    flight_info is immutable at the snapshot level; the single documented
+    exception is ``terminal``, which may be reassigned by airlines after track.
+    When terminal changes, we log at info level and update only that key
+    inside flight_info, preserving all other frozen fields.
+    """
+    flight_number = getattr(trip_row, "flight_number", None)
+    departure_date = getattr(trip_row, "departure_date", None)
+    if not flight_number or not departure_date:
+        return (False, {})
+
+    try:
+        flights = lookup_flights(flight_number, str(departure_date))
+    except Exception:
+        logger.exception(
+            "refresh_flight_status: lookup_flights raised for trip %s", trip_row.id
+        )
+        return (False, {})
+
+    if not flights:
+        return (False, {})
+
+    selected = _select_flight(flights, getattr(trip_row, "selected_departure_utc", None))
+    new_info, new_status = build_flight_info_and_status(selected)
+    if not new_status:
+        return (False, {})
+
+    old_status = getattr(trip_row, "flight_status", None) or {}
+    changes: dict = {}
+    for field in TRACKED_STATUS_FIELDS:
+        old_v = old_status.get(field)
+        new_v = new_status.get(field)
+        if old_v != new_v:
+            changes[field] = (old_v, new_v)
+
+    old_info = getattr(trip_row, "flight_info", None) or {}
+    old_terminal = old_info.get("terminal")
+    new_terminal = (new_info or {}).get("terminal")
+    if new_terminal is not None and new_terminal != old_terminal:
+        changes["terminal"] = (old_terminal, new_terminal)
+        logger.info(
+            "Trip %s terminal changed: %s -> %s",
+            trip_row.id, old_terminal, new_terminal,
+        )
+        if trip_row.flight_info is not None:
+            updated_info = dict(trip_row.flight_info)
+            updated_info["terminal"] = new_terminal
+            trip_row.flight_info = updated_info
+
+    # Replace the whole flight_status dict — ADB is the source of truth for
+    # every live field and assigning a new object triggers SQLAlchemy dirty
+    # tracking for the JSON column (in-place mutation would not).
+    trip_row.flight_status = new_status
+    return (True, changes)
+
+
+async def _handle_status_change_notifications(
+    trip_row, session, changes: dict
+) -> None:
+    """Fire pushes for detected flight status changes from refresh_flight_status."""
+    if not changes or not getattr(trip_row, "user_id", None):
+        return
+
+    flight_label = trip_row.flight_number or "your flight"
+
+    if "cancelled" in changes:
+        old, new = changes["cancelled"]
+        if new and not old:
+            await send_trip_notification(
+                user_id=trip_row.user_id,
+                notification_type=CANCELLATION,
+                title="Flight cancelled",
+                body=f"{flight_label} has been cancelled. Check with your airline for rebooking.",
+                trip_row=trip_row,
+                session=session,
+            )
+
+    if "gate" in changes:
+        old, new = changes["gate"]
+        if new and new != old:
+            body = f"{flight_label}: gate changed to {new}"
+            if old:
+                body += f" (from {old})"
+            await send_trip_notification(
+                user_id=trip_row.user_id,
+                notification_type=GATE_CHANGE,
+                title="Gate changed",
+                body=body,
+                trip_row=trip_row,
+                session=session,
+            )
 
 
 def _get_departure_utc(trip_row) -> datetime | None:
@@ -288,6 +447,38 @@ async def _process_trip(trip_row, session) -> None:
     if not is_pro_user(user):
         return
 
+    # Phase 2: Path A/B status refresh. Runs for every monitorable status
+    # (active, en_route, at_airport, at_gate) — en_route+ phases still get
+    # fresh gate/cancellation info, just no recompute afterward.
+    secs_to_dep = _seconds_to_departure(trip_row)
+    changes: dict = {}
+    if (
+        getattr(trip_row, "input_mode", None) == "flight_number"
+        and getattr(trip_row, "flight_number", None)
+        and not _should_skip_refresh(trip_row, secs_to_dep, now)
+    ):
+        try:
+            was_called, changes = await refresh_flight_status(trip_row, session)
+            if was_called:
+                try:
+                    await session.commit()
+                except Exception:
+                    logger.exception(
+                        "Failed to commit flight_status for trip %s", trip_row.id
+                    )
+        except Exception:
+            logger.exception("refresh_flight_status failed for trip %s", trip_row.id)
+
+    # Fire push notifications for detected status changes (any monitorable phase)
+    if changes:
+        try:
+            await _handle_status_change_notifications(trip_row, session, changes)
+        except Exception:
+            logger.exception(
+                "Failed to dispatch status-change notifications for trip %s",
+                trip_row.id,
+            )
+
     # Advance state based on timeline + interaction signals
     await _advance_trip_state(trip_row, session, now)
 
@@ -298,17 +489,34 @@ async def _process_trip(trip_row, session) -> None:
         await _handle_feedback_request(trip_row, session, now)
         return
 
-    # Phase-aware behavior: only recompute + full notify for active phase
+    # Phase-aware behavior: only recompute + full notify for active phase.
+    # en_route / at_airport / at_gate already had their status refreshed and
+    # any gate-change/cancellation pushes fired above.
     if current != "active":
-        # en_route, at_airport, at_gate: minimal polling, no recompute
         return
 
     # === Active phase: full recompute + notifications ===
 
-    # Recompute recommendation
+    # Recompute recommendation. Pass a FlightSnapshot reconstructed from the
+    # persisted columns when possible, so we don't re-hit ADB here.
+    prefetched_snapshot = None
+    flight_info = getattr(trip_row, "flight_info", None)
+    if flight_info:
+        prefetched_snapshot = snapshot_from_columns(
+            flight_info, getattr(trip_row, "flight_status", None)
+        )
+        if prefetched_snapshot is None:
+            logger.warning(
+                "Trip %s has flight_info but snapshot_from_columns returned None; "
+                "falling back to fresh ADB path",
+                trip_row.id,
+            )
+
     try:
         payload = RecommendationRecomputeRequest(trip_id=str(trip_row.id))
-        response = await recompute_recommendation(payload, user=user)
+        response = await recompute_recommendation(
+            payload, user=user, prefetched_snapshot=prefetched_snapshot
+        )
         if response is None:
             return
     except Exception:
@@ -316,6 +524,10 @@ async def _process_trip(trip_row, session) -> None:
         return
 
     new_leave_at = response.leave_home_at
+
+    # Persist latest_recommendation so the Active Trip Screen can render segments +
+    # map coordinates from the trip row (no round-trip to /v1/recommendations).
+    trip_row.latest_recommendation = build_latest_recommendation_jsonb(response)
 
     # Update projected_timeline from recommendation segments
     if response.segments:
@@ -327,10 +539,14 @@ async def _process_trip(trip_row, session) -> None:
         )
         if timeline:
             trip_row.projected_timeline = timeline
-        try:
-            await session.commit()
-        except Exception:
-            logger.exception("Failed to update projected_timeline for trip %s", trip_row.id)
+
+    try:
+        await session.commit()
+    except Exception:
+        logger.exception(
+            "Failed to commit projected_timeline / latest_recommendation for trip %s",
+            trip_row.id,
+        )
 
     # Morning email: 6 hours before departure, if not already sent
     secs = _seconds_to_departure(trip_row)
